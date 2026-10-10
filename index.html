@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.12">
+<meta name="x-knock-version" content="v1.13">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -39,6 +39,8 @@
   .fab{position:fixed; right:10px; z-index:500; width:44px; height:44px; border-radius:12px; border:1px solid var(--line);
        background:#fff; font-size:19px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:flex; align-items:center; justify-content:center}
 
+  .goto{position:fixed; left:10px; right:10px; z-index:540; display:flex; align-items:center; gap:8px; background:#fff; border:1px solid var(--line);
+        border-radius:12px; padding:10px 13px; font-size:15px; color:var(--dim); box-shadow:0 2px 8px rgba(0,0,0,.14); cursor:pointer}
   .fbar{position:fixed; left:10px; right:10px; z-index:550; display:none; align-items:center; gap:8px; background:#1f4fd1; color:#fff;
         border-radius:12px; padding:9px 12px; font-size:14px; font-weight:600; box-shadow:0 2px 8px rgba(0,0,0,.2)}
   .fbar span{flex:1}
@@ -109,6 +111,7 @@
 <button class="fab" id="locate" title="Where am I">◎</button>
 <button class="fab" id="layer" title="Satellite or street map">🗺️</button>
 <button class="fab" id="searchBtn" title="Search houses" style="display:none">🔍</button>
+<div class="goto" id="goto">🔎 <span>Find an address or place</span></div>
 <div class="fbar" id="fbar"><span id="fbarText"></span><button id="fbarList">List</button><button id="fbarClear">✕ Clear</button></div>
 
 <div class="hint" id="hint" style="display:none"></div>
@@ -261,8 +264,12 @@
     $('locate').style.bottom = 'calc(' + base + ' + 12px)';
     $('layer').style.bottom = 'calc(' + base + ' + 64px)';
     $('searchBtn').style.bottom = 'calc(' + base + ' + 116px)';
-    $('fbar').style.top = (topH + 8) + 'px';
-    $('hint').style.top = (topH + (mapFilter ? 60 : 10)) + 'px';
+    var gotoOn = !drawing;
+    $('goto').style.display = gotoOn ? 'flex' : 'none';
+    $('goto').style.top = (topH + 8) + 'px';
+    var below = topH + (gotoOn ? 60 : 8);
+    $('fbar').style.top = below + 'px';
+    $('hint').style.top = (below + (mapFilter ? 52 : 2)) + 'px';
   }
   window.addEventListener('resize', layout);
 
@@ -592,7 +599,7 @@
   function startDraw(){
     if (!myName) return askName(startDraw);
     drawing = true; drawPts = [];
-    $('bar').style.display = 'none'; $('drawBar').style.display = 'flex';
+    $('bar').style.display = 'none'; $('drawBar').style.display = 'flex'; layout();
     hint('Tap the corners of the turf around the houses. Finish when it is closed in.');
     $('searchBtn').style.display = 'none';
     drawPreview();
@@ -1031,6 +1038,80 @@
   $('fbarClear').addEventListener('click', function(){ mapFilter = null; $('fbar').style.display = 'none'; render(); });
   $('fbarList').addEventListener('click', function(){ (reopenList || searchSheet)(); });
   $('searchBtn').addEventListener('click', searchSheet);
+
+  // ---- find an address or place, for everyone ----------------------------------
+  // "I had to scroll to find where we are today." Esri's search (the same company
+  // as the satellite photos) knows house numbers and business names and is
+  // biased to wherever the map is pointed, so "100 Heathwood" finds the one in
+  // Broussard first. Photon (OpenStreetMap) is the backup if Esri cannot be
+  // reached; it knows places but often only the street, not the house.
+  // Results only move the map, nothing is stored, which is what anonymous Esri
+  // search allows.
+  var ESRI = 'https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/';
+  var placeRing = null, placeSeq = 0;
+  function flyTo(lat, lng){
+    closeSheet();
+    map.setView([lat, lng], 18);
+    if (placeRing) map.removeLayer(placeRing);
+    placeRing = L.circleMarker([lat, lng], { radius:22, weight:4, color:'#1f4fd1', dashArray:'6 6', fill:false, interactive:false }).addTo(map);
+    setTimeout(function(){ if (placeRing) { map.removeLayer(placeRing); placeRing = null; } }, 10000);
+  }
+  function esriFind(q, c){
+    return fetch(ESRI + 'suggest?f=json&countryCode=USA&maxSuggestions=8&text=' + encodeURIComponent(q) + '&location=' + c.lng.toFixed(4) + ',' + c.lat.toFixed(4))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j.suggestions) throw new Error('esri');
+        return j.suggestions.map(function(x){
+          var parts = x.text.replace(/, USA$/, '').split(', ');
+          return { l1:parts[0], l2:parts.slice(1).join(', '), go:function(){
+            fetch(ESRI + 'findAddressCandidates?f=json&maxLocations=1&SingleLine=' + encodeURIComponent(x.text) + '&magicKey=' + encodeURIComponent(x.magicKey))
+              .then(function(r){ return r.json(); })
+              .then(function(k){ var g = k.candidates && k.candidates[0]; if (g) flyTo(g.location.y, g.location.x); else alert('Could not find that spot.'); })
+              .catch(function(){ alert('Could not reach the map search. Check the signal and try again.'); });
+          } };
+        });
+      });
+  }
+  function photonFind(q, c){
+    return fetch('https://photon.komoot.io/api/?limit=8&lang=en&q=' + encodeURIComponent(q) + '&lat=' + c.lat.toFixed(4) + '&lon=' + c.lng.toFixed(4))
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        return (j.features || []).filter(function(x){ return !x.properties.countrycode || x.properties.countrycode === 'US'; }).map(function(x){
+          var pr = x.properties, st = [pr.housenumber, pr.street].filter(Boolean).join(' ');
+          var g = x.geometry.coordinates;
+          return { l1:pr.name || st, l2:[pr.name ? st : '', pr.city || pr.county, pr.state].filter(Boolean).join(', '), go:function(){ flyTo(g[1], g[0]); } };
+        });
+      });
+  }
+  function gotoSheet(){
+    var h = '<h3>Find an address or place</h3><input type="text" id="gq" placeholder="e.g. 418 Albertson Pkwy, or Camelot of Broussard" autocomplete="off">' +
+      '<div id="gRes" style="margin-top:6px"></div><div class="acts"><button id="gClose">Close</button></div>';
+    openSheet(h);
+    var el = $('gq'), t = null;
+    setTimeout(function(){ el.focus(); }, 60);
+    function show(list, mine){
+      if (mine !== placeSeq || !$('gRes')) return;
+      $('gRes').innerHTML = list.length ? list.map(function(x, i){
+        return '<div class="rrow tap" data-g="' + i + '"><span style="font-size:17px">📍</span><div class="n">' + esc(x.l1) +
+          (x.l2 ? '<span>' + esc(x.l2) + '</span>' : '') + '</div><div class="c">›</div></div>';
+      }).join('') : '<div class="empty">Nothing found. Try the street address.</div>';
+      Array.prototype.forEach.call(document.querySelectorAll('#gRes [data-g]'), function(r){
+        r.addEventListener('click', function(){ list[+r.dataset.g].go(); });
+      });
+    }
+    function run(){
+      var q = el.value.trim(), mine = ++placeSeq, c = map.getCenter();
+      if (q.length < 3) { $('gRes').innerHTML = ''; return; }
+      $('gRes').innerHTML = '<div class="empty">Searching…</div>';
+      esriFind(q, c).catch(function(){ return photonFind(q, c); })
+        .then(function(list){ show(list, mine); })
+        .catch(function(){ if (mine === placeSeq && $('gRes')) $('gRes').innerHTML = '<div class="empty">Could not search right now. Check the signal and try again.</div>'; });
+    }
+    el.addEventListener('input', function(){ clearTimeout(t); t = setTimeout(run, 300); });
+    el.addEventListener('keydown', function(e){ if (e.key === 'Enter') { clearTimeout(t); run(); } });
+    $('gClose').addEventListener('click', closeSheet);
+  }
+  $('goto').addEventListener('click', gotoSheet);
 
   $('reportBtn').addEventListener('click', function(){ repTeam = isPastor() ? null : myTeam; report(); });
 
