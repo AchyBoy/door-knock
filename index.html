@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.13">
+<meta name="x-knock-version" content="v1.14">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -244,6 +244,84 @@
   // pins on their own pane so a turf's shading never sits over a house
   map.createPane('pins').style.zIndex = 450;
   var pinLayer = L.layerGroup().addTo(map);
+
+  // ---- the houses: a grey dot on every door not yet knocked --------------------
+  // Lafayette and Iberia come from the parishes' own address points (with the
+  // address); St. Martin and Vermilion from Microsoft roofs (address filled on
+  // tap). Fetched a ~1 km cell at a time, kept for the session.
+  map.createPane('houses').style.zIndex = 440;
+  var houseRenderer = L.canvas({ pane:'houses' });
+  var houseLayer = L.layerGroup().addTo(map);
+  var houses = {}, houseCell = {}, cellState = {}, CELL = 0.01;
+  function cellKey(lat, lng){ return Math.floor(lat / CELL) + ':' + Math.floor(lng / CELL); }
+  function cellsFor(b){
+    var out = [];
+    for (var y = Math.floor(b.getSouth() / CELL); y <= Math.floor(b.getNorth() / CELL); y++)
+      for (var x = Math.floor(b.getWest() / CELL); x <= Math.floor(b.getEast() / CELL); x++) out.push(y + ':' + x);
+    return out;
+  }
+  // resolves true when it brought in cells that were not here before
+  function loadCells(b){
+    var want = cellsFor(b).filter(function(k){ return !cellState[k]; });
+    if (!want.length || want.length > 40) return Promise.resolve(false);
+    return Promise.all(want.map(function(k){
+      cellState[k] = 'loading';
+      var yx = k.split(':').map(Number), s0 = yx[0] * CELL, w0 = yx[1] * CELL;
+      return fetch(API + 'houses?s=' + s0.toFixed(4) + '&w=' + w0.toFixed(4) + '&n=' + (s0 + CELL).toFixed(4) + '&e=' + (w0 + CELL).toFixed(4))
+        .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+        .then(function(j){
+          houseCell[k] = [];
+          (j.houses || []).forEach(function(h){
+            var o = { id:h[0], lat:h[1], lng:h[2], addr:h[3] || '' };
+            houses[o.id] = o; houseCell[k].push(o);
+          });
+          cellState[k] = 'done';
+        })
+        .catch(function(){ delete cellState[k]; });
+    })).then(function(){ return true; });
+  }
+  // A house is done once a pin points at it, or (pins made before the dots)
+  // sits within 12 m of it.
+  var doneHouse = {};
+  function computeDone(){
+    doneHouse = {};
+    live('pin').forEach(function(p){
+      if (p.data.house) { doneHouse[p.data.house] = 1; return; }
+      var near = nearHouse(L.latLng(p.data.lat, p.data.lng), 12);
+      if (near) doneHouse[near.id] = 1;
+    });
+  }
+  function nearHouse(ll, meters, skipDone){
+    var best = null, bestD = meters, k0 = cellKey(ll.lat, ll.lng).split(':').map(Number);
+    for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+      (houseCell[(k0[0] + dy) + ':' + (k0[1] + dx)] || []).forEach(function(h){
+        if (skipDone && doneHouse[h.id]) return;
+        var d = map.distance(ll, [h.lat, h.lng]);
+        if (d < bestD) { bestD = d; best = h; }
+      });
+    }
+    return best;
+  }
+  var HOUSE_ZOOM = 17;
+  function renderHouses(){
+    houseLayer.clearLayers();
+    computeDone();
+    if (map.getZoom() < HOUSE_ZOOM) return;
+    var b = map.getBounds().pad(0.2);
+    cellsFor(b).forEach(function(k){
+      (houseCell[k] || []).forEach(function(h){
+        if (doneHouse[h.id] || !b.contains([h.lat, h.lng])) return;
+        L.circleMarker([h.lat, h.lng], { renderer:houseRenderer, radius:5.5, weight:1.5, color:'#374151',
+          fillColor:'#d1d5db', fillOpacity:0.95, interactive:false }).addTo(houseLayer);
+      });
+    });
+  }
+  function refreshHouses(){
+    if (map.getZoom() < HOUSE_ZOOM - 1) { houseLayer.clearLayers(); return; }
+    renderHouses();
+    loadCells(map.getBounds().pad(0.2)).then(function(added){ if (added) renderHouses(); });
+  }
+  map.on('moveend', refreshHouses);
   var turfLayer = L.layerGroup().addTo(map);
   var markers = {};   // pin id -> circleMarker
 
@@ -264,7 +342,10 @@
     $('locate').style.bottom = 'calc(' + base + ' + 12px)';
     $('layer').style.bottom = 'calc(' + base + ' + 64px)';
     $('searchBtn').style.bottom = 'calc(' + base + ' + 116px)';
-    var gotoOn = !drawing;
+    // with a popup open, the strip of map above it is where the house shows;
+    // the search bar and the results bar only cover it
+    var gotoOn = !drawing && !sheetOpen;
+    $('fbar').style.display = mapFilter && !sheetOpen ? 'flex' : 'none';
     $('goto').style.display = gotoOn ? 'flex' : 'none';
     $('goto').style.top = (topH + 8) + 'px';
     var below = topH + (gotoOn ? 60 : 8);
@@ -351,7 +432,7 @@
     $('sync').textContent = n ? (n + ' not sent yet') : '';
   }
 
-  function render(){ renderPins(); renderTurfs(); renderCounts(); renderSync(); layout(); }
+  function render(){ renderPins(); renderHouses(); renderTurfs(); renderCounts(); renderSync(); layout(); }
 
   // ---- saving: one item at a time, so two phones never erase each other ---------
   function save(it){
@@ -417,6 +498,7 @@
     $('sheet').classList.add('on');
     if (!noScrim) $('scrim').classList.add('on');
     sheetOpen = true;
+    layout();
   }
   function closeSheet(){
     $('sheet').classList.remove('on'); $('scrim').classList.remove('on');
@@ -463,11 +545,21 @@
   function creator(d){ return d.by || (d.log && d.log[0] && d.log[0].who) || ''; }
   function same(a, b){ return !!a && String(a).trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
 
-  function newPin(latlng){
-    if (!myName) return askName(function(){ newPin(latlng); });
-    var it = { id:'p' + rid(11), kind:'pin', data:{ lat:+latlng.lat.toFixed(6), lng:+latlng.lng.toFixed(6), addr:'', status:'', note:'', log:[] } };
+  // house: a grey dot that was tapped, so the address is already known
+  function newPin(latlng, house){
+    if (!myName) return askName(function(){ newPin(latlng, house); });
+    var at = house ? L.latLng(house.lat, house.lng) : latlng;
+    var it = { id:'p' + rid(11), kind:'pin', data:{ lat:+at.lat.toFixed(6), lng:+at.lng.toFixed(6), addr:'', status:'', note:'', log:[] } };
+    if (house) it.data.house = house.id;
     pinSheet(it, true);
-    lookup(it);
+    useHouse(it, house);
+  }
+  function useHouse(it, house){
+    if (house && house.addr) {
+      var el = $('addr');
+      if (el && !el.dataset.typed) el.value = house.addr;
+      setSub('Wrong house? Tap the right one on the map.');
+    } else lookup(it);
   }
 
   // fill the address for wherever the new dot sits now, unless they typed one
@@ -485,9 +577,21 @@
   }
 
   function moveDraft(ll){
-    draft.data.lat = +ll.lat.toFixed(6); draft.data.lng = +ll.lng.toFixed(6);
-    if (ring) ring.setLatLng(ll);
-    lookup(draft);
+    var house = map.getZoom() >= HOUSE_ZOOM ? nearHouse(ll, snapMeters(), true) : null;
+    var at = house ? L.latLng(house.lat, house.lng) : ll;
+    draft.data.lat = +at.lat.toFixed(6); draft.data.lng = +at.lng.toFixed(6);
+    if (house) draft.data.house = house.id; else delete draft.data.house;
+    if (ring) ring.setLatLng(at);
+    useHouse(draft, house);
+  }
+  // A tap snaps to the nearest grey dot within about a fingertip, never further
+  // than 25 m (houses on these streets are ~18 m apart, so it still picks the
+  // roof that was tapped, not the neighbour's).
+  function snapMeters(){ return Math.min(25, tapMeters(32)); }
+  // how many metres a finger-width (px) covers at this zoom
+  function tapMeters(px){
+    var c = map.getSize().divideBy(2);
+    return map.distance(map.containerPointToLatLng(c), map.containerPointToLatLng(c.add([px, 0])));
   }
 
   function openPin(id){
@@ -583,7 +687,7 @@
       setTimeout(function(){ if (!drawing) hint(''); }, 2500);
       return;
     }
-    newPin(e.latlng);
+    newPin(e.latlng, nearHouse(e.latlng, snapMeters(), true));
   });
 
   // ---- turf -------------------------------------------------------------------------
@@ -665,19 +769,67 @@
     return ins;
   }
 
+  // A turf's progress: of the houses inside it, how many have been knocked.
+  function turfHouses(t){
+    var b = L.polygon(t.data.pts).getBounds(), out = { total:0, done:0, left:[], loaded:true };
+    cellsFor(b).forEach(function(k){
+      if (cellState[k] !== 'done') out.loaded = false;
+      (houseCell[k] || []).forEach(function(h){
+        if (!inside([h.lat, h.lng], t.data.pts)) return;
+        out.total++;
+        if (doneHouse[h.id]) out.done++; else out.left.push(h);
+      });
+    });
+    return out;
+  }
+  function loadTurfs(){
+    computeDone();
+    return Promise.all(live('turf').filter(function(t){ return t.data.pts && t.data.pts.length > 2; })
+      .map(function(t){ return loadCells(L.polygon(t.data.pts).getBounds()); }))
+      .then(function(r){ computeDone(); return r.some(Boolean); });
+  }
+  function progressText(hp){
+    if (!hp.total) return hp.loaded ? '' : 'counting houses…';
+    return hp.done + ' of ' + hp.total + ' houses knocked';
+  }
+  // the houses in a turf nobody has knocked yet
+  function leftList(t, back){
+    var hp = turfHouses(t);
+    var h = '<h3>' + esc(t.data.name || 'Turf') + ', still to knock</h3><div class="sub">' + progressText(hp) + ' · ' + hp.left.length + ' left</div>';
+    h += hp.left.length ? hp.left.slice().sort(function(a, b){ return (a.addr || '~').localeCompare(b.addr || '~', undefined, { numeric:true }); }).slice(0, 400).map(function(x){
+      return '<div class="rrow tap" data-h="' + esc(x.id) + '"><span class="dot" style="background:#d1d5db; border-color:#374151"></span><div class="n">' +
+        esc(x.addr || 'House, no address on file') + '</div><div class="c">›</div></div>';
+    }).join('') : '<div class="empty">' + (hp.total ? 'Every house in this turf has been knocked.' : 'No houses on file for this area.') + '</div>';
+    h += '<div class="acts"><button id="llBack">Back</button>' + (hp.left.length ? '<button class="save" id="llMap">Show on map</button>' : '') + '</div>';
+    openSheet(h);
+    $('llBack').addEventListener('click', back);
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-h]'), function(r){
+      r.addEventListener('click', function(){ var x = houses[r.dataset.h]; closeSheet(); map.setView([x.lat, x.lng], 19); });
+    });
+    if ($('llMap')) $('llMap').addEventListener('click', function(){
+      closeSheet();
+      map.fitBounds(L.latLngBounds(hp.left.map(function(x){ return [x.lat, x.lng]; })), { padding:[50,50], maxZoom:19 });
+      if (map.getZoom() < HOUSE_ZOOM) map.setZoom(HOUSE_ZOOM);
+    });
+  }
+
   function turfsList(){
     var turfs = live('turf'), pins = live('pin');
     var h = '<h3>Turfs</h3><div class="sub">Each area and how many of its doors are marked.</div>';
     if (!turfs.length) h += '<div class="empty">No turfs yet. Tap ✏️ Draw turf, then tap the corners around a block.</div>';
     turfs.forEach(function(t){
-      var n = 0, yes = 0;
+      var n = 0, yes = 0, hp = turfHouses(t);
       pins.forEach(function(p){ if (inside([p.data.lat, p.data.lng], t.data.pts)) { n++; if (p.data.status === 'yes') yes++; } });
       h += '<div class="turf"><span class="sw" style="background:' + turfColor(t) + '"></span><div class="t"><b>' + esc(t.data.name || 'Turf') + '</b>' +
-           '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + doorsN(n) + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
+           '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + (progressText(hp) || doorsN(n) + ' marked') + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
+           (hp.left.length ? '<button data-left="' + t.id + '">Left</button>' : '') +
            '<button data-go="' + t.id + '">Go</button><button data-ed="' + t.id + '">Edit</button></div>';
     });
     h += '<div class="acts"><button id="closeTurfs">Close</button></div>';
     openSheet(h);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-left]'), function(b){
+      b.addEventListener('click', function(){ leftList(items[b.dataset.left], turfsList); });
+    });
     $('closeTurfs').addEventListener('click', closeSheet);
     Array.prototype.forEach.call(document.querySelectorAll('[data-go]'), function(b){
       b.addEventListener('click', function(){ var t = items[b.dataset.go]; closeSheet(); map.fitBounds(L.polygon(t.data.pts).getBounds(), { padding:[30,30] }); });
@@ -686,7 +838,10 @@
       b.addEventListener('click', function(){ turfSheet(JSON.parse(JSON.stringify(items[b.dataset.ed])), false); });
     });
   }
-  $('turfsBtn').addEventListener('click', turfsList);
+  $('turfsBtn').addEventListener('click', function(){
+    turfsList();
+    loadTurfs().then(function(added){ if (added && $('closeTurfs')) turfsList(); });
+  });
 
   // ---- name, title, share ----------------------------------------------------------
   function askName(then){
@@ -750,13 +905,13 @@
       if (last.status === 'yes' || last.status === 'back') follow.push({ p:p, l:last });
     });
     var turfs = live('turf').filter(function(t){ return (t.data.team || '') === teamId && t.data.pts && t.data.pts.length > 2; }).map(function(t){
-      var all = 0, wk = 0;
+      var all = 0, wk = 0, hp = turfHouses(t);
       live('pin').forEach(function(p){
         if (!inside([p.data.lat, p.data.lng], t.data.pts)) return;
         all++;
         if ((p.data.log || []).some(function(l){ return l.at >= from && l.at < to; })) wk++;
       });
-      return { t:t, all:all, wk:wk };
+      return { t:t, all:all, wk:wk, hp:hp };
     });
     return { doors:doors, people:people, tot:tot, follow:follow, turfs:turfs };
   }
@@ -866,7 +1021,8 @@
     h += '<label>Turfs</label>';
     h += w.turfs.length ? w.turfs.map(function(x){
       return '<div class="rrow tap" data-turf="' + x.t.id + '"><span class="dot" style="background:' + turfColor(x.t) + '"></span><div class="n">' + esc(x.t.data.name || 'Turf') +
-        '<span>' + x.wk + ' this week</span></div><div class="c">' + doorsN(x.all) + ' marked ›</div></div>';
+        '<span>' + (progressText(x.hp) ? progressText(x.hp) + ' · ' : '') + x.wk + ' this week</span></div><div class="c">' +
+        (x.hp.total ? (x.hp.total - x.hp.done) + ' left ›' : doorsN(x.all) + ' marked ›') + '</div></div>';
     }).join('') : '<div class="empty">No turf drawn for this team. Pick the team when you draw or edit one.</div>';
     if (!isPastor()) h += '<div class="empty" style="font-size:13px; margin-top:14px">Tip: in Safari tap Share, then Add to Home Screen. ' +
       'The icon always opens the map as you, the leader, on any day.</div>';
@@ -879,7 +1035,9 @@
       r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
     });
     Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-turf]'), function(r){
-      r.addEventListener('click', function(){ var t = items[r.dataset.turf]; closeSheet(); map.fitBounds(L.polygon(t.data.pts).getBounds(), { padding:[30,30] }); });
+      r.addEventListener('click', function(){ var t = items[r.dataset.turf];
+        if (turfHouses(t).total) return leftList(t, report);
+        closeSheet(); map.fitBounds(L.polygon(t.data.pts).getBounds(), { padding:[30,30] }); });
     });
     wireTaps(repTeam, teamName(repTeam), to, roster);
   }
@@ -1033,9 +1191,9 @@
   }
   function showFbar(n, from){
     $('fbarText').textContent = 'Showing ' + (n === 1 ? '1 house' : n + ' houses') + ' · ' + (from || 'your search');
-    $('fbar').style.display = 'flex'; render();
+    render();
   }
-  $('fbarClear').addEventListener('click', function(){ mapFilter = null; $('fbar').style.display = 'none'; render(); });
+  $('fbarClear').addEventListener('click', function(){ mapFilter = null; render(); });
   $('fbarList').addEventListener('click', function(){ (reopenList || searchSheet)(); });
   $('searchBtn').addEventListener('click', searchSheet);
 
@@ -1113,7 +1271,10 @@
   }
   $('goto').addEventListener('click', gotoSheet);
 
-  $('reportBtn').addEventListener('click', function(){ repTeam = isPastor() ? null : myTeam; report(); });
+  $('reportBtn').addEventListener('click', function(){
+    repTeam = isPastor() ? null : myTeam; report();
+    loadTurfs().then(function(added){ if (added && sheetOpen && document.querySelector('#sheet .wk')) report(); });
+  });
 
   // ---- locate + layer ----------------------------------------------------------------
   // The map opens where you are standing, and the blue dot follows you as you
@@ -1160,6 +1321,7 @@
   setLayerIcon();
   render();
   watchMe();
+  refreshHouses();
 
   // 🔴 GitHub Pages lets a phone keep the page for 10 minutes, so right after an
   // update Lizzy opened a new link with the OLD page, which could not read it and
