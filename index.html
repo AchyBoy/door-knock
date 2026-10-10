@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.4">
+<meta name="x-knock-version" content="v1.4.1">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -650,6 +650,7 @@
 
   // ---- teams + weekly report (leaders and the pastor only) -------------------------
   function doorsN(n){ return n + (n === 1 ? ' door' : ' doors'); }
+  function peopleN(n){ return n + (n === 1 ? ' person' : ' people'); }
   function liveTeams(){ return live('team').sort(function(a, b){ return a.data.name.localeCompare(b.data.name); }); }
   function weekStart(ms){ var d = new Date(ms); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }   // Sunday
   function addDays(ms, n){ var d = new Date(ms); d.setDate(d.getDate() + n); return d.getTime(); }
@@ -742,7 +743,7 @@
       all.doors += w.doors;
       STATUSES.forEach(function(s){ all.tot[s.k] = (all.tot[s.k] || 0) + (w.tot[s.k] || 0); });
       return '<div class="rrow tap" data-team="' + r[0] + '"><div class="n">' + esc(r[1]) + '<span>' +
-        (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + Object.keys(w.people).length + ' people</span></div>' +
+        (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + peopleN(Object.keys(w.people).length) + '</span></div>' +
         '<div class="c">' + doorsN(w.doors) + ' ›</div></div>';
     }).join('');
     h += '<div class="rrow"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + '</div></div>' + statChips(all.tot);
