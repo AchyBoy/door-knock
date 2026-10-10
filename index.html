@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="x-knock-version" content="v1.0">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Door Knocking</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{ --ink:#1b1b1f; --dim:#6b6b76; --card:#fff; --line:#e3e3e8; --brand:#1f4fd1;
+         --noans:#e8a317; --noint:#e5534b; --yes:#24a35f; --back:#3b82f6 }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; height:100%; overflow:hidden; color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; -webkit-text-size-adjust:100%}
+  #map{position:fixed; inset:0}
+  button{font:inherit; cursor:pointer}
+
+  /* top bar: the map's name and the counts */
+  .top{position:fixed; top:0; left:0; right:0; z-index:500; padding:calc(env(safe-area-inset-top) + 8px) 10px 8px;
+       background:rgba(255,255,255,.94); border-bottom:1px solid var(--line); backdrop-filter:blur(8px)}
+  .top .row{display:flex; align-items:center; gap:8px}
+  .title{font-weight:700; font-size:17px; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border:0; background:none; text-align:left; padding:2px 0}
+  .me{border:1px solid var(--line); background:#f4f4f7; border-radius:999px; padding:5px 11px; font-size:13px; font-weight:600; white-space:nowrap}
+  .counts{display:flex; gap:6px; margin-top:6px; overflow-x:auto; scrollbar-width:none}
+  .counts::-webkit-scrollbar{display:none}
+  .chip{display:flex; align-items:center; gap:5px; font-size:12.5px; font-weight:600; white-space:nowrap;
+        background:#f4f4f7; border-radius:999px; padding:4px 9px}
+  .dot{width:10px; height:10px; border-radius:50%; flex:0 0 10px; border:1.5px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+  .sync{font-size:11.5px; color:var(--dim); white-space:nowrap}
+
+  /* bottom bar */
+  .bar{position:fixed; left:0; right:0; bottom:0; z-index:500; display:flex; gap:8px;
+       padding:8px 10px calc(env(safe-area-inset-bottom) + 10px); background:rgba(255,255,255,.94);
+       border-top:1px solid var(--line); backdrop-filter:blur(8px)}
+  .bar button{flex:1; border:1px solid var(--line); background:#fff; border-radius:12px; padding:11px 4px; font-size:14px; font-weight:600}
+  .bar button.primary{background:var(--brand); color:#fff; border-color:var(--brand)}
+  .fab{position:fixed; right:10px; z-index:500; width:44px; height:44px; border-radius:12px; border:1px solid var(--line);
+       background:#fff; font-size:19px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:flex; align-items:center; justify-content:center}
+
+  .hint{position:fixed; left:50%; transform:translateX(-50%); z-index:600; background:rgba(20,20,26,.88); color:#fff;
+        font-size:13.5px; padding:8px 13px; border-radius:10px; max-width:92vw; text-align:center; pointer-events:none}
+
+  /* bottom sheet */
+  .scrim{position:fixed; inset:0; z-index:900; background:rgba(0,0,0,.28); display:none}
+  .sheet{position:fixed; left:0; right:0; bottom:0; z-index:901; background:var(--card); border-radius:18px 18px 0 0;
+         padding:14px 16px calc(env(safe-area-inset-bottom) + 16px); max-height:86vh; overflow-y:auto; display:none;
+         box-shadow:0 -6px 24px rgba(0,0,0,.18); max-width:620px; margin:0 auto}
+  .sheet.on, .scrim.on{display:block}
+  .sheet h3{margin:0 0 2px; font-size:18px}
+  .sheet .sub{color:var(--dim); font-size:13px; margin-bottom:12px}
+  .sheet label{display:block; font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); margin:12px 0 5px}
+  .sheet input[type=text], .sheet textarea{width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 11px; font:inherit; font-size:16px; background:#fafafc}
+  .sheet textarea{min-height:66px; resize:vertical}
+  .stat{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .stat button{border:2px solid var(--line); background:#fff; border-radius:12px; padding:13px 6px; font-size:15px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:7px}
+  .stat button.on{color:#fff}
+  .acts{display:flex; gap:8px; margin-top:16px}
+  .acts button{flex:1; border-radius:12px; padding:13px; font-size:15px; font-weight:700; border:1px solid var(--line); background:#fff}
+  .acts .save{background:var(--brand); color:#fff; border-color:var(--brand)}
+  .acts .del{flex:0 0 auto; color:var(--noint)}
+  .log{margin:12px 0 0; padding:0; list-style:none; font-size:13px; color:var(--dim)}
+  .log li{padding:3px 0; display:flex; gap:7px; align-items:center}
+  .turf{border:1px solid var(--line); border-radius:12px; padding:11px 12px; margin:0 0 8px; display:flex; align-items:center; gap:10px}
+  .turf .sw{width:14px; height:14px; border-radius:4px; flex:0 0 14px}
+  .turf .t{flex:1; min-width:0}
+  .turf .t b{display:block; font-size:15px}
+  .turf .t span{font-size:12.5px; color:var(--dim)}
+  .turf button{border:1px solid var(--line); background:#fff; border-radius:9px; padding:7px 10px; font-size:13px; font-weight:600}
+  .empty{color:var(--dim); font-size:14px; padding:6px 0 4px}
+  .leaflet-tooltip.turf-lbl{background:rgba(255,255,255,.9); border:0; box-shadow:0 1px 4px rgba(0,0,0,.25); font-weight:700; font-size:12px; padding:3px 7px}
+  .leaflet-tooltip.turf-lbl:before{display:none}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="top">
+  <div class="row">
+    <button class="title" id="title">Door Knocking</button>
+    <span class="sync" id="sync"></span>
+    <button class="me" id="me">You: ?</button>
+  </div>
+  <div class="counts" id="counts"></div>
+</div>
+
+<button class="fab" id="locate" title="Where am I">◎</button>
+<button class="fab" id="layer" title="Satellite or street map">🗺️</button>
+
+<div class="hint" id="hint" style="display:none"></div>
+
+<div class="bar" id="bar">
+  <button id="drawBtn">✏️ Draw turf</button>
+  <button id="turfsBtn">Turfs</button>
+  <button id="shareBtn">Share link</button>
+</div>
+<div class="bar" id="drawBar" style="display:none">
+  <button id="undoPt">Undo</button>
+  <button id="cancelDraw">Cancel</button>
+  <button id="finishDraw" class="primary">Finish</button>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+  'use strict';
+  var API = 'https://api.jobhubgo.com/api/knock/';
+
+  var STATUSES = [
+    { k:'noans', label:'No answer',      color:'#e8a317' },
+    { k:'noint', label:'Not interested', color:'#e5534b' },
+    { k:'yes',   label:'Interested',     color:'#24a35f' },
+    { k:'back',  label:'Come back',      color:'#3b82f6' }
+  ];
+  var STAT = {}; STATUSES.forEach(function(s){ STAT[s.k] = s; });
+  var TURF_COLORS = ['#8b5cf6','#ec4899','#f97316','#14b8a6','#0ea5e9','#84cc16','#a855f7','#ef4444'];
+
+  // ---- which map: the key rides in the link, like the YAM sheet --------------
+  function rid(n){ var a='abcdefghijkmnpqrstuvwxyz23456789', s=''; for(var i=0;i<n;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
+  var m = /[#&]m=([a-z0-9_-]+)/i.exec(location.hash);
+  var MAP = m ? m[1].toLowerCase() : (localStorage.getItem('knock-last-map') || rid(10));
+  if (!m) history.replaceState(null, '', location.pathname + location.search + '#m=' + MAP);
+  localStorage.setItem('knock-last-map', MAP);
+
+  var K_ITEMS = 'knock-items-' + MAP, K_PEND = 'knock-pend-' + MAP, K_SINCE = 'knock-since-' + MAP;
+  function load(k, d){ try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch(e){ return d; } }
+  var items = load(K_ITEMS, {});          // id -> { id, kind, data, updatedAt, deleted }
+  var pending = load(K_PEND, {});         // id -> true, written here and not yet on the server
+  var since = load(K_SINCE, 0);
+  var myName = localStorage.getItem('knock-name') || '';
+  function persist(){
+    try { localStorage.setItem(K_ITEMS, JSON.stringify(items)); localStorage.setItem(K_PEND, JSON.stringify(pending)); } catch(e){}
+  }
+
+  // ---- map ----------------------------------------------------------------------
+  var map = L.map('map', { zoomControl:false, attributionControl:true, maxZoom:21 });
+  var street = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:21, maxNativeZoom:19, attribution:'© OpenStreetMap'
+  });
+  var sat = L.layerGroup([
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
+    }),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom:21, maxNativeZoom:19
+    })
+  ]);
+  var useSat = localStorage.getItem('knock-layer') !== 'street';
+  (useSat ? sat : street).addTo(map);
+  function setLayerIcon(){ $('layer').textContent = useSat ? '🗺️' : '🛰️'; }
+
+  // pins on their own pane so a turf's shading never sits over a house
+  map.createPane('pins').style.zIndex = 450;
+  var pinLayer = L.layerGroup().addTo(map);
+  var turfLayer = L.layerGroup().addTo(map);
+  var markers = {};   // pin id -> circleMarker
+
+  function $(id){ return document.getElementById(id); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function when(ms){
+    var d = new Date(ms), now = new Date();
+    var t = d.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+    if (d.toDateString() === now.toDateString()) return 'today ' + t;
+    return d.toLocaleDateString([], { weekday:'short', month:'short', day:'numeric' }) + ' ' + t;
+  }
+
+  // ---- layout: keep the floating buttons clear of the bars ---------------------
+  function layout(){
+    var topH = document.querySelector('.top').offsetHeight;
+    var barH = ($('bar').style.display === 'none' ? $('drawBar') : $('bar')).offsetHeight;
+    $('locate').style.bottom = (barH + 12) + 'px';
+    $('layer').style.bottom = (barH + 64) + 'px';
+    $('hint').style.top = (topH + 10) + 'px';
+  }
+  window.addEventListener('resize', layout);
+
+  // ---- render -------------------------------------------------------------------
+  function live(kind){
+    var out = [];
+    for (var id in items) { var it = items[id]; if (it.kind === kind && !it.deleted) out.push(it); }
+    return out;
+  }
+
+  function renderPins(){
+    var seen = {};
+    live('pin').forEach(function(it){
+      seen[it.id] = 1;
+      var d = it.data, c = (STAT[d.status] || STAT.noans).color;
+      var mk = markers[it.id];
+      if (!mk) {
+        mk = L.circleMarker([d.lat, d.lng], { pane:'pins', radius:9, weight:2.5, color:'#fff', fillOpacity:1, fillColor:c, bubblingMouseEvents:false });
+        mk.on('click', function(){ if (!drawing) openPin(it.id); });
+        mk.addTo(pinLayer);
+        markers[it.id] = mk;
+      } else {
+        mk.setLatLng([d.lat, d.lng]);
+        mk.setStyle({ fillColor:c });
+      }
+    });
+    for (var id in markers) if (!seen[id]) { pinLayer.removeLayer(markers[id]); delete markers[id]; }
+  }
+
+  function turfColor(t){ return t.data.color || TURF_COLORS[0]; }
+  function renderTurfs(){
+    turfLayer.clearLayers();
+    live('turf').forEach(function(t){
+      if (!t.data.pts || t.data.pts.length < 3) return;
+      var poly = L.polygon(t.data.pts, { color:turfColor(t), weight:3, fillOpacity:0.08, interactive:false });
+      poly.addTo(turfLayer);
+      var lbl = esc(t.data.name || 'Turf') + (t.data.who ? ' · ' + esc(t.data.who) : '');
+      // label on the top edge, not the middle, where it would hide a house
+      var b = poly.getBounds();
+      L.tooltip({ permanent:true, direction:'top', offset:[0,-2], className:'turf-lbl', interactive:false })
+        .setLatLng([b.getNorth(), b.getCenter().lng]).setContent(lbl).addTo(turfLayer);
+    });
+    if (drawing) drawPreview();
+  }
+
+  function renderCounts(){
+    var pins = live('pin'), by = {}, mineToday = 0, today = new Date().toDateString();
+    pins.forEach(function(p){
+      by[p.data.status] = (by[p.data.status] || 0) + 1;
+      (p.data.log || []).forEach(function(l){ if (l.who === myName && new Date(l.at).toDateString() === today) mineToday++; });
+    });
+    var h = '<span class="chip">' + pins.length + ' doors</span>';
+    STATUSES.forEach(function(s){
+      h += '<span class="chip"><span class="dot" style="background:' + s.color + '"></span>' + (by[s.k] || 0) + ' ' + s.label + '</span>';
+    });
+    if (myName) h += '<span class="chip">You today: ' + mineToday + '</span>';
+    $('counts').innerHTML = h;
+    var meta = items.meta && !items.meta.deleted ? items.meta.data : {};
+    $('title').textContent = meta.title || 'Door Knocking';
+    document.title = meta.title || 'Door Knocking';
+    $('me').textContent = 'You: ' + (myName || '?');
+  }
+
+  function renderSync(){
+    var n = Object.keys(pending).length;
+    $('sync').textContent = n ? (n + ' not sent yet') : '';
+  }
+
+  function render(){ renderPins(); renderTurfs(); renderCounts(); renderSync(); layout(); }
+
+  // ---- saving: one item at a time, so two phones never erase each other ---------
+  function save(it){
+    it.updatedAt = Math.max(Date.now(), (items[it.id] && items[it.id].updatedAt || 0) + 1);
+    items[it.id] = it;
+    pending[it.id] = true;
+    persist(); render(); flush();
+  }
+
+  var flushing = false;
+  function flush(){
+    if (flushing) return;
+    var ids = Object.keys(pending);
+    if (!ids.length) return;
+    flushing = true;
+    var id = ids[0], it = items[id];
+    if (!it) { delete pending[id]; flushing = false; persist(); return flush(); }
+    fetch(API + MAP + '/' + id, {
+      method:'PUT', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ kind:it.kind, data:it.data, updatedAt:it.updatedAt, deleted:!!it.deleted })
+    }).then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function(j){
+        // Only clear it if nothing newer was saved here while this was in flight.
+        if (items[id] && items[id].updatedAt === it.updatedAt) delete pending[id];
+        if (j && j.stale && j.item && !pending[id]) items[id] = j.item;
+        flushing = false; persist(); renderSync();
+        if (j && j.stale) render();
+        flush();
+      })
+      .catch(function(){ flushing = false; renderSync(); setTimeout(flush, 6000); });
+  }
+
+  function pull(){
+    fetch(API + MAP + '?since=' + Math.max(0, since - 15000))
+      .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function(j){
+        var changed = false;
+        (j.items || []).forEach(function(x){
+          var cur = items[x.id];
+          if (cur && pending[x.id] && cur.updatedAt >= x.updatedAt) return;
+          if (cur && cur.updatedAt > x.updatedAt) return;
+          if (cur && cur.updatedAt === x.updatedAt && !!cur.deleted === !!x.deleted) return;
+          items[x.id] = x; changed = true;
+          if (pending[x.id] && x.updatedAt >= cur.updatedAt) delete pending[x.id];
+        });
+        since = j.now || since;
+        localStorage.setItem(K_SINCE, JSON.stringify(since));
+        if (changed) { persist(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
+        if (firstPull) { firstPull = false; frame(); }
+      })
+      .catch(function(){ if (firstPull) { firstPull = false; frame(); } });
+  }
+  var firstPull = true;
+
+  // ---- the sheet ------------------------------------------------------------------
+  var sheetOpen = false;
+  function openSheet(html){
+    $('sheet').innerHTML = html;
+    $('sheet').classList.add('on'); $('scrim').classList.add('on');
+    sheetOpen = true;
+  }
+  function closeSheet(){
+    $('sheet').classList.remove('on'); $('scrim').classList.remove('on');
+    sheetOpen = false; render();
+  }
+  $('scrim').addEventListener('click', closeSheet);
+
+  // ---- a house --------------------------------------------------------------------
+  var geoSeq = 0;
+  function reverse(lat, lng, cb){
+    var mine = ++geoSeq;
+    fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=' + lat + '&lon=' + lng)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (mine !== geoSeq) return;
+        var a = j.address || {};
+        var road = a.road || a.pedestrian || a.residential || '';
+        var s = [a.house_number, road].filter(Boolean).join(' ');
+        if (!a.house_number && road) s = road + ' (number?)';
+        cb(s || '');
+      })
+      .catch(function(){ if (mine === geoSeq) cb(''); });
+  }
+
+  function newPin(latlng){
+    if (!myName) return askName(function(){ newPin(latlng); });
+    var it = { id:'p' + rid(11), kind:'pin', data:{ lat:+latlng.lat.toFixed(6), lng:+latlng.lng.toFixed(6), addr:'', status:'', note:'', log:[] } };
+    pinSheet(it, true);
+    reverse(it.data.lat, it.data.lng, function(addr){
+      var el = $('addr');
+      if (el && !el.value && !el.dataset.typed) el.value = addr;
+    });
+  }
+
+  function openPin(id){
+    if (!items[id]) return;
+    pinSheet(JSON.parse(JSON.stringify(items[id])), false);
+  }
+
+  function pinSheet(it, isNew){
+    var d = it.data, chosen = isNew ? '' : d.status;
+    var h = '<h3>' + (isNew ? 'Mark this house' : esc(d.addr || 'This house')) + '</h3>';
+    h += '<div class="sub">' + (isNew ? 'Finding the address…' :
+          (d.who ? 'Last marked by ' + esc(d.who) + ', ' + when(d.at) : '')) + '</div>';
+    h += '<label>Address</label><input type="text" id="addr" placeholder="123 Main St" value="' + esc(d.addr) + '">';
+    h += '<label>What happened</label><div class="stat">';
+    STATUSES.forEach(function(s){
+      h += '<button data-k="' + s.k + '" style="border-color:' + s.color + '"><span class="dot" style="background:' + s.color + '"></span>' + s.label + '</button>';
+    });
+    h += '</div><label>Note</label><textarea id="note" placeholder="Names, prayer request, best time to come back…">' + esc(d.note) + '</textarea>';
+    if (!isNew && d.log && d.log.length) {
+      h += '<ul class="log">' + d.log.slice(-6).reverse().map(function(l){
+        var s = STAT[l.status] || STAT.noans;
+        return '<li><span class="dot" style="background:' + s.color + '"></span>' + s.label + ' · ' + esc(l.who) + ' · ' + when(l.at) + '</li>';
+      }).join('') + '</ul>';
+    }
+    h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delPin">Remove</button>') +
+         '<button id="cancelPin">Cancel</button><button class="save" id="savePin">Save</button></div>';
+    openSheet(h);
+    if (isNew) setTimeout(function(){ var s = document.querySelector('.sheet .sub'); if (s) s.textContent = 'Tap what happened, then Save.'; }, 1500);
+
+    function paint(){
+      Array.prototype.forEach.call(document.querySelectorAll('.stat button'), function(b){
+        var on = b.dataset.k === chosen, s = STAT[b.dataset.k];
+        b.classList.toggle('on', on);
+        b.style.background = on ? s.color : '#fff';
+      });
+    }
+    paint();
+    Array.prototype.forEach.call(document.querySelectorAll('.stat button'), function(b){
+      b.addEventListener('click', function(){ chosen = b.dataset.k; paint(); });
+    });
+    $('addr').addEventListener('input', function(){ this.dataset.typed = '1'; });
+    $('cancelPin').addEventListener('click', closeSheet);
+    $('savePin').addEventListener('click', function(){
+      if (!chosen) { var s = document.querySelector('.sheet .sub'); s.textContent = 'Pick what happened first.'; s.style.color = '#e5534b'; return; }
+      var now = Date.now();
+      d.addr = $('addr').value.trim();
+      d.note = $('note').value.trim();
+      d.log = (d.log || []).concat([{ status:chosen, who:myName, at:now }]).slice(-20);
+      d.status = chosen; d.who = myName; d.at = now;
+      save(it);
+      closeSheet();
+    });
+    if (!isNew) $('delPin').addEventListener('click', function(){
+      if (!confirm('Remove this house from the map?')) return;
+      it.deleted = true; save(it); closeSheet();
+    });
+  }
+
+  // tapping near a pin opens it instead of dropping a second one on the same house
+  function nearestPin(latlng){
+    var p = map.latLngToContainerPoint(latlng), best = null, bestD = 22;
+    for (var id in markers) {
+      var q = map.latLngToContainerPoint(markers[id].getLatLng());
+      var dd = Math.hypot(p.x - q.x, p.y - q.y);
+      if (dd < bestD) { bestD = dd; best = id; }
+    }
+    return best;
+  }
+
+  map.on('click', function(e){
+    if (drawing) { drawPts.push([e.latlng.lat, e.latlng.lng]); drawPreview(); return; }
+    var near = nearestPin(e.latlng);
+    if (near) openPin(near); else newPin(e.latlng);
+  });
+
+  // ---- turf -------------------------------------------------------------------------
+  var drawing = false, drawPts = [], drawLayer = L.layerGroup().addTo(map), editingTurf = null;
+  function hint(t){ var h = $('hint'); h.textContent = t; h.style.display = t ? 'block' : 'none'; layout(); }
+  function drawPreview(){
+    drawLayer.clearLayers();
+    if (drawPts.length >= 2) L.polygon(drawPts, { color:'#1f4fd1', weight:3, dashArray:'6 6', fillOpacity:0.1, interactive:false }).addTo(drawLayer);
+    drawPts.forEach(function(p){ L.circleMarker(p, { radius:6, color:'#1f4fd1', fillColor:'#fff', fillOpacity:1, weight:3, interactive:false }).addTo(drawLayer); });
+    $('finishDraw').disabled = drawPts.length < 3;
+    $('finishDraw').style.opacity = drawPts.length < 3 ? .5 : 1;
+  }
+  function startDraw(){
+    if (!myName) return askName(startDraw);
+    drawing = true; drawPts = [];
+    $('bar').style.display = 'none'; $('drawBar').style.display = 'flex';
+    hint('Tap the corners of the turf around the houses. Finish when it is closed in.');
+    drawPreview();
+  }
+  function endDraw(){
+    drawing = false; drawPts = []; drawLayer.clearLayers();
+    $('bar').style.display = 'flex'; $('drawBar').style.display = 'none';
+    hint('');
+  }
+  $('drawBtn').addEventListener('click', startDraw);
+  $('cancelDraw').addEventListener('click', endDraw);
+  $('undoPt').addEventListener('click', function(){ drawPts.pop(); drawPreview(); });
+  $('finishDraw').addEventListener('click', function(){
+    if (drawPts.length < 3) return;
+    var n = live('turf').length;
+    var t = { id:'t' + rid(11), kind:'turf', data:{ pts:drawPts.slice(), name:'', who:'', color:TURF_COLORS[n % TURF_COLORS.length] } };
+    endDraw();
+    turfSheet(t, true);
+  });
+
+  function knownNames(){
+    var s = {};
+    if (myName) s[myName] = 1;
+    live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.who) s[l.who] = 1; }); });
+    live('turf').forEach(function(t){ if (t.data.who) s[t.data.who] = 1; });
+    return Object.keys(s).sort();
+  }
+
+  function turfSheet(t, isNew){
+    var h = '<h3>' + (isNew ? 'New turf' : 'Edit turf') + '</h3><div class="sub">Name the area and who is working it.</div>';
+    h += '<label>Area name</label><input type="text" id="tname" placeholder="Oak St to Pine St" value="' + esc(t.data.name) + '">';
+    h += '<label>Who has it</label><input type="text" id="twho" list="names" placeholder="Paul and Ryan" value="' + esc(t.data.who) + '">';
+    h += '<datalist id="names">' + knownNames().map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+    h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delTurf">Delete</button>') +
+         '<button id="cancelTurf">Cancel</button><button class="save" id="saveTurf">Save</button></div>';
+    openSheet(h);
+    $('cancelTurf').addEventListener('click', closeSheet);
+    $('saveTurf').addEventListener('click', function(){
+      t.data.name = $('tname').value.trim() || 'Turf';
+      t.data.who = $('twho').value.trim();
+      save(t); closeSheet();
+    });
+    if (!isNew) $('delTurf').addEventListener('click', function(){
+      if (!confirm('Delete the turf "' + (t.data.name || 'Turf') + '"? The houses stay on the map.')) return;
+      t.deleted = true; save(t); closeSheet();
+    });
+  }
+
+  function inside(pt, poly){
+    var x = pt[1], y = pt[0], ins = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      var xi = poly[i][1], yi = poly[i][0], xj = poly[j][1], yj = poly[j][0];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) ins = !ins;
+    }
+    return ins;
+  }
+
+  function turfsList(){
+    var turfs = live('turf'), pins = live('pin');
+    var h = '<h3>Turfs</h3><div class="sub">Each area and how many of its doors are marked.</div>';
+    if (!turfs.length) h += '<div class="empty">No turfs yet. Tap ✏️ Draw turf, then tap the corners around a block.</div>';
+    turfs.forEach(function(t){
+      var n = 0, yes = 0;
+      pins.forEach(function(p){ if (inside([p.data.lat, p.data.lng], t.data.pts)) { n++; if (p.data.status === 'yes') yes++; } });
+      h += '<div class="turf"><span class="sw" style="background:' + turfColor(t) + '"></span><div class="t"><b>' + esc(t.data.name || 'Turf') + '</b>' +
+           '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + n + ' doors' + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
+           '<button data-go="' + t.id + '">Go</button><button data-ed="' + t.id + '">Edit</button></div>';
+    });
+    h += '<div class="acts"><button id="closeTurfs">Close</button></div>';
+    openSheet(h);
+    $('closeTurfs').addEventListener('click', closeSheet);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-go]'), function(b){
+      b.addEventListener('click', function(){ var t = items[b.dataset.go]; closeSheet(); map.fitBounds(L.polygon(t.data.pts).getBounds(), { padding:[30,30] }); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ed]'), function(b){
+      b.addEventListener('click', function(){ turfSheet(JSON.parse(JSON.stringify(items[b.dataset.ed])), false); });
+    });
+  }
+  $('turfsBtn').addEventListener('click', turfsList);
+
+  // ---- name, title, share ----------------------------------------------------------
+  function askName(then){
+    var h = '<h3>What is your name?</h3><div class="sub">Every house you mark shows who knocked it.</div>' +
+            '<input type="text" id="nm" placeholder="Your first name" value="' + esc(myName) + '" autocomplete="given-name">' +
+            '<div class="acts"><button class="save" id="nmSave">Save</button></div>';
+    openSheet(h);
+    var el = $('nm'); setTimeout(function(){ el.focus(); }, 50);
+    function go(){
+      var v = el.value.trim(); if (!v) return el.focus();
+      myName = v; localStorage.setItem('knock-name', v);
+      closeSheet(); if (then) then();
+    }
+    $('nmSave').addEventListener('click', go);
+    el.addEventListener('keydown', function(e){ if (e.key === 'Enter') go(); });
+  }
+  $('me').addEventListener('click', function(){ askName(); });
+
+  $('title').addEventListener('click', function(){
+    var cur = items.meta && !items.meta.deleted ? items.meta.data.title : '';
+    var v = prompt('Name this map', cur || 'Door Knocking');
+    if (v == null) return;
+    save({ id:'meta', kind:'meta', data:{ title:v.trim() } });
+  });
+
+  $('shareBtn').addEventListener('click', function(){
+    var url = location.origin + location.pathname + '#m=' + MAP;
+    if (navigator.share) { navigator.share({ title:document.title, url:url }).catch(function(){}); return; }
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert('Link copied. Anyone with it sees and marks this same map.'); });
+    else prompt('Copy this link', url);
+  });
+
+  // ---- locate + layer ----------------------------------------------------------------
+  var meDot = null;
+  function locate(zoomTo, tapped){
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(function(pos){
+      var ll = [pos.coords.latitude, pos.coords.longitude];
+      if (meDot) meDot.setLatLng(ll);
+      else meDot = L.circleMarker(ll, { radius:7, color:'#fff', weight:3, fillColor:'#1a73e8', fillOpacity:1, interactive:false }).addTo(map);
+      if (zoomTo) map.setView(ll, Math.max(map.getZoom(), 18));
+    }, function(){ if (tapped) alert('Could not get your location. Check that location is allowed for this site.'); },
+    { enableHighAccuracy:true, timeout:10000, maximumAge:15000 });
+  }
+  $('locate').addEventListener('click', function(){ locate(true, true); });
+  $('layer').addEventListener('click', function(){
+    map.removeLayer(useSat ? sat : street);
+    useSat = !useSat;
+    (useSat ? sat : street).addTo(map);
+    localStorage.setItem('knock-layer', useSat ? 'sat' : 'street');
+    setLayerIcon();
+  });
+
+  // first view: the houses already marked, else where you stand
+  function frame(){
+    if (framed) return;
+    var pts = live('pin').map(function(p){ return [p.data.lat, p.data.lng]; });
+    live('turf').forEach(function(t){ pts = pts.concat(t.data.pts); });
+    if (pts.length) { framed = true; map.fitBounds(L.latLngBounds(pts), { padding:[40,40], maxZoom:18 }); }
+    else { framed = true; locate(true); }
+  }
+  var framed = false;
+
+  // ---- go ------------------------------------------------------------------------------
+  map.setView([30.5044, -90.4612], 13);
+  setLayerIcon();
+  render();
+  if (live('pin').length || live('turf').length) frame();
+  pull(); flush();
+  setInterval(function(){ if (!document.hidden) { pull(); flush(); } }, 8000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) { pull(); flush(); } });
+  window.addEventListener('online', flush);
+  if (!myName) askName();
+})();
+</script>
+</body>
+</html>
