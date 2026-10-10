@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.5.1">
+<meta name="x-knock-version" content="v1.5.2">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -290,6 +290,8 @@
       (isPastor() ? ' · Pastor' : isLeader() ? ' · Leader' : '');
     $('reportBtn').style.display = (isPastor() || isLeader()) ? '' : 'none';
     $('searchBtn').style.display = (isPastor() || isLeader()) ? 'flex' : 'none';
+    // a leader's Share sends the team link, so say so: that is how workers join
+    $('shareBtn').textContent = isLeader() ? 'Invite team' : 'Share link';
   }
 
   function renderSync(){
@@ -661,7 +663,7 @@
   $('shareBtn').addEventListener('click', function(){
     var t = teamOf(myTeam);
     shareUrl(t ? teamLink(t) : BASE, document.title,
-      t ? 'Team link copied. Whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.');
+      t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.');
   });
 
   // ---- teams + weekly report (leaders and the pastor only) -------------------------
