@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.6">
+<meta name="x-knock-version" content="v1.7">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -145,9 +145,20 @@
 
   // ---- which map: the key rides in the link, like the YAM sheet --------------
   function rid(n){ var a='abcdefghijkmnpqrstuvwxyz23456789', s=''; for(var i=0;i<n;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
-  var m = /[#&]m=([a-z0-9_-]+)/i.exec(location.hash);
-  var MAP = m ? m[1].toLowerCase() : (localStorage.getItem('knock-last-map') || rid(10));
-  if (!m) history.replaceState(null, '', location.pathname + location.search + '#m=' + MAP);
+  // 🔴 Links carry the map and team in the QUERY (?m=..&t=..). They used to ride
+  // after the #, and a team link texted to Lizzy arrived without its team. The
+  // # part is the first thing a share or a messaging app throws away; the query
+  // never is. Old # links are still read, decoded, for anyone who has one.
+  function linkArg(k){
+    var q = new URLSearchParams(location.search).get(k);
+    if (q) return q.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    var h = location.hash;
+    try { h = decodeURIComponent(h); } catch(e){}
+    var x = new RegExp('[#&?;]' + k + '=([a-z0-9_-]+)', 'i').exec(h.replace(/&amp;/g, '&'));
+    return x ? x[1].toLowerCase() : '';
+  }
+  var MAP = linkArg('m') || localStorage.getItem('knock-last-map') || rid(10);
+  if (!linkArg('m')) history.replaceState(null, '', location.pathname + '?m=' + MAP);
   localStorage.setItem('knock-last-map', MAP);
 
   // Who you are on this map rides in the link too, and sticks on the phone:
@@ -155,11 +166,10 @@
   //   &t=<team>&L=<key>      that team's leader, sees the team's report
   //   &p=<key>               the pastor, sees every team and sets up leaders
   // Workers never pick anything; the link their leader sent does it.
-  function hashArg(k){ var x = new RegExp('[#&]' + k + '=([a-z0-9_-]+)', 'i').exec(location.hash); return x ? x[1].toLowerCase() : ''; }
   var K_TEAM = 'knock-team-' + MAP, K_LEAD = 'knock-lead-' + MAP, K_PASTOR = 'knock-pastor-' + MAP;
-  if (hashArg('t')) { localStorage.setItem(K_TEAM, hashArg('t')); if (!hashArg('L')) localStorage.removeItem(K_LEAD); }
-  if (hashArg('L')) localStorage.setItem(K_LEAD, hashArg('L'));
-  if (hashArg('p')) localStorage.setItem(K_PASTOR, hashArg('p'));
+  if (linkArg('t')) { localStorage.setItem(K_TEAM, linkArg('t')); if (!linkArg('L')) localStorage.removeItem(K_LEAD); }
+  if (linkArg('L')) localStorage.setItem(K_LEAD, linkArg('L'));
+  if (linkArg('p')) localStorage.setItem(K_PASTOR, linkArg('p'));
   var myTeam = localStorage.getItem(K_TEAM) || '';
   var myLead = localStorage.getItem(K_LEAD) || '';
   var myPastor = localStorage.getItem(K_PASTOR) || '';
@@ -182,7 +192,7 @@
   function teamName(id){ var t = teamOf(id); return t ? t.data.name : 'No team'; }
   function isPastor(){ var a = items.access; return !!(myPastor && a && !a.deleted && a.data.pastorKey === myPastor); }
   function isLeader(){ var t = teamOf(myTeam); return !!(myLead && t && t.data.leaderKey === myLead); }
-  var BASE = location.origin + location.pathname + '#m=' + MAP;
+  var BASE = location.origin + location.pathname + '?m=' + MAP;
   function teamLink(t){ return BASE + '&t=' + t.id; }
   function leaderLink(t){ return BASE + '&t=' + t.id + '&L=' + t.data.leaderKey; }
 
