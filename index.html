@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.2">
+<meta name="x-knock-version" content="v1.3">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -302,15 +302,35 @@
 
   // ---- the sheet ------------------------------------------------------------------
   var sheetOpen = false;
-  function openSheet(html){
+  function openSheet(html, noScrim){
     $('sheet').innerHTML = html;
-    $('sheet').classList.add('on'); $('scrim').classList.add('on');
+    $('sheet').classList.add('on');
+    if (!noScrim) $('scrim').classList.add('on');
     sheetOpen = true;
   }
   function closeSheet(){
     $('sheet').classList.remove('on'); $('scrim').classList.remove('on');
+    clearRing(); draft = null;
     sheetOpen = false; render();
   }
+
+  // While a house's sheet is open, a blue ring marks the exact spot and the map
+  // slides it into the strip above the sheet, so you can see where the dot
+  // lands. On a new house, tapping the map again moves it.
+  var ring = null, draft = null;
+  function showRing(ll, isNew){
+    clearRing();
+    ring = L.circleMarker(ll, { pane:'pins', radius:isNew ? 11 : 16, weight:4, color:'#1f4fd1',
+      fillColor:'#fff', fillOpacity:isNew ? 1 : 0, interactive:false }).addTo(map);
+  }
+  function clearRing(){ if (ring) { map.removeLayer(ring); ring = null; } }
+  function panAboveSheet(ll){
+    var top = document.querySelector('.top').offsetHeight;
+    var bottom = window.innerHeight - $('sheet').offsetHeight;
+    var p = map.latLngToContainerPoint(ll);
+    map.panBy([p.x - map.getSize().x / 2, p.y - (top + bottom) / 2]);
+  }
+  function setSub(t){ var s = document.querySelector('.sheet .sub'); if (s) { s.textContent = t; s.style.color = ''; } }
   $('scrim').addEventListener('click', closeSheet);
 
   // ---- a house --------------------------------------------------------------------
@@ -337,10 +357,27 @@
     if (!myName) return askName(function(){ newPin(latlng); });
     var it = { id:'p' + rid(11), kind:'pin', data:{ lat:+latlng.lat.toFixed(6), lng:+latlng.lng.toFixed(6), addr:'', status:'', note:'', log:[] } };
     pinSheet(it, true);
+    lookup(it);
+  }
+
+  // fill the address for wherever the new dot sits now, unless they typed one
+  function lookup(it){
+    var el = $('addr');
+    if (el && el.dataset.typed) return;
+    if (el) el.value = '';
+    setSub('Finding the address…');
     reverse(it.data.lat, it.data.lng, function(addr){
       var el = $('addr');
-      if (el && !el.value && !el.dataset.typed) el.value = addr;
+      if (!el || el.dataset.typed || draft !== it) return;
+      el.value = addr;
+      setSub('Wrong spot? Tap the right house on the map.');
     });
+  }
+
+  function moveDraft(ll){
+    draft.data.lat = +ll.lat.toFixed(6); draft.data.lng = +ll.lng.toFixed(6);
+    if (ring) ring.setLatLng(ll);
+    lookup(draft);
   }
 
   function openPin(id){
@@ -371,8 +408,11 @@
     var canRemove = !isNew && same(creator(d), myName);
     h += '<div class="acts">' + (canRemove ? '<button class="del" id="delPin">Remove</button>' : '') +
          '<button id="cancelPin">Cancel</button><button class="save" id="savePin">Save</button></div>';
-    openSheet(h);
-    if (isNew) setTimeout(function(){ var s = document.querySelector('.sheet .sub'); if (s) s.textContent = 'Tap what happened, then Save.'; }, 1500);
+    openSheet(h, true);
+    var ll = L.latLng(d.lat, d.lng);
+    showRing(ll, isNew);
+    draft = isNew ? it : null;
+    panAboveSheet(ll);
 
     function paint(){
       Array.prototype.forEach.call(document.querySelectorAll('.stat button'), function(b){
@@ -422,6 +462,8 @@
   map.on('click', function(e){
     if (drawing) { drawPts.push([e.latlng.lat, e.latlng.lng]); drawPreview(); return; }
     var near = nearestPin(e.latlng);
+    if (draft) return near ? openPin(near) : moveDraft(e.latlng);
+    if (sheetOpen) return closeSheet();
     if (near) return openPin(near);
     // zoomed out, one tap covers a whole block: zoom in rather than guess a house
     if (map.getZoom() < 17) {
