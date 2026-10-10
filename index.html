@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.10">
+<meta name="x-knock-version" content="v1.11">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -760,8 +760,63 @@
   }
   function statChips(tot){
     return '<div class="counts" style="flex-wrap:wrap">' + STATUSES.map(function(s){
-      return '<span class="chip"><span class="dot" style="background:' + s.color + '"></span>' + (tot[s.k] || 0) + ' ' + s.label + '</span>';
+      return '<span class="chip tap" data-st="' + s.k + '"><span class="dot" style="background:' + s.color + '"></span>' + (tot[s.k] || 0) + ' ' + s.label + ' ›</span>';
     }).join('') + '</div>';
+  }
+
+  // ---- tapping a number in the report lists the houses behind it ----------------
+  // teamId null = every team. A house is listed with the LAST entry that matches
+  // (that team, that person), the same rule the totals use, so a list always
+  // agrees with the number that was tapped.
+  function weekHouses(teamId, from, to, f){
+    var out = [];
+    live('pin').forEach(function(p){
+      var es = (p.data.log || []).filter(function(l){
+        return l.at >= from && l.at < to && (teamId == null || (l.team || '') === teamId) && (!f.who || same(l.who, f.who));
+      });
+      if (!es.length) return;
+      var last = es[es.length - 1];
+      if (f.status && last.status !== f.status) return;
+      out.push({ p:p, l:last });
+    });
+    return out.sort(function(a, b){ return b.l.at - a.l.at; });
+  }
+  var reopenList = null;
+  function houseList(title, sub, rows, back){
+    var h = '<h3>' + esc(title) + '</h3><div class="sub">' + esc(sub) + ' · ' + (rows.length === 1 ? '1 house' : rows.length + ' houses') + '</div>';
+    h += rows.length ? rows.map(function(r){
+      var s = STAT[r.l.status] || STAT.noans, d = r.p.data;
+      return '<div class="rrow tap" data-pin="' + r.p.id + '"><span class="dot" style="background:' + s.color + '"></span><div class="n">' +
+        esc(d.addr || 'No address') + '<span>' + s.label + ' · ' + esc(r.l.who) + ' · ' + when(r.l.at) +
+        (d.note ? '\n“' + esc(d.note) + '”' : '') + '</span></div><div class="c">›</div></div>';
+    }).join('') : '<div class="empty">No houses.</div>';
+    h += '<div class="acts"><button id="hlBack">Back</button>' + (rows.length ? '<button class="save" id="hlMap">Show on map</button>' : '') + '</div>';
+    openSheet(h);
+    $('hlBack').addEventListener('click', back);
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pin]'), function(r){
+      r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
+    });
+    if ($('hlMap')) $('hlMap').addEventListener('click', function(){
+      mapFilter = {}; rows.forEach(function(r){ mapFilter[r.p.id] = 1; });
+      closeSheet();
+      map.fitBounds(L.latLngBounds(rows.map(function(r){ return [r.p.data.lat, r.p.data.lng]; })), { padding:[60,60], maxZoom:19 });
+      reopenList = function(){ houseList(title, sub, rows, back); };
+      showFbar(rows.length, title);
+    });
+  }
+  // wire the report's tappable numbers: the total, each status, each person
+  function wireTaps(teamId, title, to, roster){
+    var sub = dayLabel(repWeek) + ' – ' + dayLabel(addDays(to, -1)), back = function(){ report(); };
+    var all = document.querySelector('#sheet [data-all]');
+    if (all) all.addEventListener('click', function(){ houseList(title + ', doors knocked', sub, weekHouses(teamId, repWeek, to, {}), back); });
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-st]'), function(c){
+      c.addEventListener('click', function(){ var s = STAT[c.dataset.st];
+        houseList(title + ', ' + s.label, sub, weekHouses(teamId, repWeek, to, { status:s.k }), back); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-who]'), function(c){
+      c.addEventListener('click', function(){ var x = roster[+c.dataset.who];
+        houseList(x.name, sub, weekHouses(teamId, repWeek, to, { who:x.name }), back); });
+    });
   }
 
   function report(){
@@ -770,7 +825,7 @@
     if (repTeam == null) return reportAll(to);
     var w = teamWeek(repTeam, repWeek, to);
     var h = '<h3>' + esc(teamName(repTeam)) + '</h3><div class="sub">Weekly report, Sunday to Saturday</div>' + weekNav();
-    h += '<div class="rrow"><div class="n">Doors knocked</div><div class="c">' + w.doors + '</div></div>' + statChips(w.tot);
+    h += '<div class="rrow tap" data-all="1"><div class="n">Doors knocked</div><div class="c">' + w.doors + ' ›</div></div>' + statChips(w.tot);
     // Team: everyone whose phone opened this team's link, plus anyone who marked
     // a door for it, with this week's doors beside each (0 shows who is idle).
     var team = {};
@@ -783,9 +838,9 @@
     Object.keys(w.people).forEach(function(n){ var x = person(n); if (x) x.doors = Object.keys(w.people[n]).length; });
     var roster = Object.keys(team).map(function(k){ return team[k]; }).sort(function(a, b){ return (b.lead - a.lead) || (b.doors - a.doors) || a.name.localeCompare(b.name); });
     h += '<label>Team' + (roster.length ? ' (' + roster.length + ')' : '') + ' · doors this week</label>';
-    h += roster.length ? roster.map(function(x){
-      return '<div class="rrow"><div class="n">' + esc(x.name) + (x.lead ? ' <b style="font-size:11px; color:#1f4fd1">LEADER</b>' : '') +
-        (x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : '') + '</div><div class="c">' + x.doors + '</div></div>';
+    h += roster.length ? roster.map(function(x, i){
+      return '<div class="rrow tap" data-who="' + i + '"><div class="n">' + esc(x.name) + (x.lead ? ' <b style="font-size:11px; color:#1f4fd1">LEADER</b>' : '') +
+        (x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : '') + '</div><div class="c">' + x.doors + ' ›</div></div>';
     }).join('') : '';
     h += '<div class="empty" style="font-size:13px">' + (roster.length ? '' : 'Nobody yet. ') +
       'Anyone who opens this team\'s Invite team link shows up here.</div>';
@@ -798,8 +853,8 @@
     }).join('') : '<div class="empty">None this week.</div>';
     h += '<label>Turfs</label>';
     h += w.turfs.length ? w.turfs.map(function(x){
-      return '<div class="rrow"><span class="dot" style="background:' + turfColor(x.t) + '"></span><div class="n">' + esc(x.t.data.name || 'Turf') +
-        '<span>' + x.wk + ' this week</span></div><div class="c">' + doorsN(x.all) + ' marked</div></div>';
+      return '<div class="rrow tap" data-turf="' + x.t.id + '"><span class="dot" style="background:' + turfColor(x.t) + '"></span><div class="n">' + esc(x.t.data.name || 'Turf') +
+        '<span>' + x.wk + ' this week</span></div><div class="c">' + doorsN(x.all) + ' marked ›</div></div>';
     }).join('') : '<div class="empty">No turf drawn for this team. Pick the team when you draw or edit one.</div>';
     if (!isPastor()) h += '<div class="empty" style="font-size:13px; margin-top:14px">Tip: in Safari tap Share, then Add to Home Screen. ' +
       'The icon always opens the map as you, the leader, on any day.</div>';
@@ -808,9 +863,13 @@
     wireWeek();
     $('repClose').addEventListener('click', closeSheet);
     if ($('repBack')) $('repBack').addEventListener('click', function(){ repTeam = null; report(); });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-pin]'), function(r){
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pin]'), function(r){
       r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
     });
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-turf]'), function(r){
+      r.addEventListener('click', function(){ var t = items[r.dataset.turf]; closeSheet(); map.fitBounds(L.polygon(t.data.pts).getBounds(), { padding:[30,30] }); });
+    });
+    wireTaps(repTeam, teamName(repTeam), to, roster);
   }
 
   function reportAll(to){
@@ -827,7 +886,7 @@
         (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + peopleN(Object.keys(w.people).length) + ' knocked</span></div>' +
         '<div class="c">' + doorsN(w.doors) + ' ›</div></div>';
     }).join('');
-    h += '<div class="rrow"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + '</div></div>' + statChips(all.tot);
+    h += '<div class="rrow tap" data-all="1"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + ' ›</div></div>' + statChips(all.tot);
     h += '<label>Teams</label>' + (liveTeams().length ? body : '<div class="empty">No leaders set up yet. Tap Leaders to add them.</div>' + body);
     h += '<div class="acts"><button id="repTeams">Leaders</button><button id="repClose">Close</button></div>';
     openSheet(h);
@@ -837,6 +896,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-team]'), function(r){
       r.addEventListener('click', function(){ repTeam = r.dataset.team; report(); });
     });
+    wireTaps(null, 'Everyone', to, []);
   }
 
   // Pastor only: add a leader, send them their link.
@@ -954,16 +1014,17 @@
       mapFilter = {}; list.forEach(function(p){ mapFilter[p.id] = 1; });
       closeSheet();
       map.fitBounds(L.latLngBounds(list.map(function(p){ return [p.data.lat, p.data.lng]; })), { padding:[60,60], maxZoom:19 });
+      reopenList = searchSheet;
       showFbar(list.length);
     });
     if (!sq.q) setTimeout(function(){ var el = $('sq'); if (el) el.focus(); }, 60);
   }
-  function showFbar(n){
-    $('fbarText').textContent = 'Showing ' + (n === 1 ? '1 house' : n + ' houses') + ' from your search';
+  function showFbar(n, from){
+    $('fbarText').textContent = 'Showing ' + (n === 1 ? '1 house' : n + ' houses') + ' · ' + (from || 'your search');
     $('fbar').style.display = 'flex'; render();
   }
   $('fbarClear').addEventListener('click', function(){ mapFilter = null; $('fbar').style.display = 'none'; render(); });
-  $('fbarList').addEventListener('click', searchSheet);
+  $('fbarList').addEventListener('click', function(){ (reopenList || searchSheet)(); });
   $('searchBtn').addEventListener('click', searchSheet);
 
   $('reportBtn').addEventListener('click', function(){ repTeam = isPastor() ? null : myTeam; report(); });
