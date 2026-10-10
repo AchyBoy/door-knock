@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.15">
+<meta name="x-knock-version" content="v1.16">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -92,6 +92,12 @@
   .tap{cursor:pointer}
   .sheet select{width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 11px; font:inherit; font-size:16px; background:#fafafc}
   .empty{color:var(--dim); font-size:14px; padding:6px 0 4px}
+  .vtx{background:#fff; border:3px solid #1f4fd1; border-radius:50%; box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  .vtx.new{background:#1f4fd1}
+  .pick{display:flex; flex-wrap:wrap; gap:7px}
+  .pick button{border:1.5px solid var(--line); background:#fff; border-radius:999px; padding:8px 13px; font-size:14.5px; font-weight:600}
+  .pick button.on{background:#1f4fd1; border-color:#1f4fd1; color:#fff}
+  .fixed{border:1px solid var(--line); border-radius:10px; padding:10px 11px; font-size:16px; background:#f4f4f7; color:var(--dim)}
   .leaflet-tooltip.turf-lbl{background:rgba(255,255,255,.9); border:0; box-shadow:0 1px 4px rgba(0,0,0,.25); font-weight:700; font-size:12px; padding:3px 7px}
   .leaflet-tooltip.turf-lbl:before{display:none}
 </style>
@@ -676,7 +682,7 @@
   }
 
   map.on('click', function(e){
-    if (drawing) { drawPts.push([e.latlng.lat, e.latlng.lng]); drawPreview(); return; }
+    if (drawing) { addCorner(e.latlng); return; }
     var near = nearestPin(e.latlng);
     if (draft) return near ? openPin(near) : moveDraft(e.latlng);
     if (sheetOpen) return closeSheet();
@@ -692,73 +698,138 @@
   });
 
   // ---- turf -------------------------------------------------------------------------
-  var drawing = false, drawPts = [], drawLayer = L.layerGroup().addTo(map), editingTurf = null;
+  // Drawing a turf. Each corner is a handle you can DRAG. A new tap joins the
+  // outline where it adds the least length, not after the last tap, so tapping
+  // the corners in any order still gives a clean shape (tapping in the "wrong"
+  // order used to cross the lines into a bow-tie).
+  var drawing = false, drawPts = [], drawLayer = L.layerGroup().addTo(map), editingTurf = null, drawPoly = null, addOrder = [];
   function hint(t){ var h = $('hint'); h.textContent = t; h.style.display = t ? 'block' : 'none'; layout(); }
+  var vtxIcon = L.divIcon({ className:'vtx', iconSize:[24, 24] });
   function drawPreview(){
     drawLayer.clearLayers();
-    if (drawPts.length >= 2) L.polygon(drawPts, { color:'#1f4fd1', weight:3, dashArray:'6 6', fillOpacity:0.1, interactive:false }).addTo(drawLayer);
-    drawPts.forEach(function(p){ L.circleMarker(p, { radius:6, color:'#1f4fd1', fillColor:'#fff', fillOpacity:1, weight:3, interactive:false }).addTo(drawLayer); });
+    drawPoly = drawPts.length >= 2 ? L.polygon(drawPts, { color:'#1f4fd1', weight:3, dashArray:'6 6', fillOpacity:0.1, interactive:false }).addTo(drawLayer) : null;
+    drawPts.forEach(function(p, i){
+      var m = L.marker(p, { icon:vtxIcon, draggable:true, keyboard:false, bubblingMouseEvents:false }).addTo(drawLayer);
+      m.on('drag', function(e){ var ll = e.target.getLatLng(); drawPts[i] = [ll.lat, ll.lng]; if (drawPoly) drawPoly.setLatLngs(drawPts); });
+      m.on('dragend', drawPreview);
+    });
     $('finishDraw').disabled = drawPts.length < 3;
     $('finishDraw').style.opacity = drawPts.length < 3 ? .5 : 1;
   }
-  function startDraw(){
-    if (!myName) return askName(startDraw);
-    drawing = true; drawPts = [];
+  function addCorner(ll){
+    var p = [ll.lat, ll.lng];
+    if (drawPts.length < 3) { drawPts.push(p); addOrder.push(drawPts.length - 1); return drawPreview(); }
+    var best = 0, bestCost = Infinity;
+    for (var i = 0; i < drawPts.length; i++) {
+      var a = drawPts[i], b = drawPts[(i + 1) % drawPts.length];
+      var cost = map.distance(a, p) + map.distance(p, b) - map.distance(a, b);
+      if (cost < bestCost) { bestCost = cost; best = i + 1; }
+    }
+    drawPts.splice(best, 0, p);
+    addOrder = addOrder.map(function(k){ return k >= best ? k + 1 : k; }); addOrder.push(best);
+    drawPreview();
+  }
+  function startDraw(turf){
+    if (!myName) return askName(function(){ startDraw(turf); });
+    drawing = true;
+    editingTurf = turf && turf.id ? turf : null;
+    drawPts = editingTurf ? editingTurf.data.pts.map(function(p){ return p.slice(); }) : [];
+    addOrder = [];
     $('bar').style.display = 'none'; $('drawBar').style.display = 'flex'; layout();
-    hint('Tap the corners of the turf around the houses. Finish when it is closed in.');
+    hint(editingTurf ? 'Drag the corners to change the turf. Tap the map to add a corner.' :
+      'Tap the corners around the houses, in any order. Drag a corner to move it.');
     $('searchBtn').style.display = 'none';
+    if (editingTurf) map.fitBounds(L.polygon(drawPts).getBounds(), { padding:[40,40] });
     drawPreview();
   }
   function endDraw(){
-    drawing = false; drawPts = []; drawLayer.clearLayers();
+    drawing = false; drawPts = []; addOrder = []; editingTurf = null; drawLayer.clearLayers(); drawPoly = null;
     $('bar').style.display = 'flex'; $('drawBar').style.display = 'none';
     hint('');
   }
-  $('drawBtn').addEventListener('click', startDraw);
+  $('drawBtn').addEventListener('click', function(){ startDraw(); });
   $('cancelDraw').addEventListener('click', endDraw);
-  $('undoPt').addEventListener('click', function(){ drawPts.pop(); drawPreview(); });
+  $('undoPt').addEventListener('click', function(){
+    if (!addOrder.length) return;
+    var k = addOrder.pop();
+    drawPts.splice(k, 1);
+    addOrder = addOrder.map(function(x){ return x > k ? x - 1 : x; });
+    drawPreview();
+  });
   $('finishDraw').addEventListener('click', function(){
     if (drawPts.length < 3) return;
+    if (editingTurf) {
+      var t0 = JSON.parse(JSON.stringify(editingTurf)); t0.data.pts = drawPts.slice();
+      endDraw(); save(t0); hint('Turf updated.'); setTimeout(function(){ if (!drawing) hint(''); }, 2000);
+      return;
+    }
     var n = live('turf').length;
     var t = { id:'t' + rid(11), kind:'turf', data:{ pts:drawPts.slice(), name:'', who:'', color:TURF_COLORS[n % TURF_COLORS.length] } };
     endDraw();
     turfSheet(t, true);
   });
 
-  function knownNames(){
+
+  // Everyone on a team: phones that opened its link, plus anyone who has
+  // marked a door for it.
+  function teamPeople(teamId){
     var s = {};
-    if (myName) s[myName] = 1;
-    live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.who) s[l.who] = 1; }); });
-    live('turf').forEach(function(t){ if (t.data.who) s[t.data.who] = 1; });
-    return Object.keys(s).sort();
+    live('member').forEach(function(m){ if (m.data.team === teamId && m.data.name) s[m.data.name.trim().toLowerCase()] = m.data.name.trim(); });
+    live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.team === teamId && l.who) s[l.who.trim().toLowerCase()] = s[l.who.trim().toLowerCase()] || l.who.trim(); }); });
+    return Object.keys(s).map(function(k){ return s[k]; }).sort(function(a, b){ return a.localeCompare(b); });
   }
+  function canEditTurf(t){ return isPastor() || (isLeader() && (t.data.team || '') === myTeam); }
 
   function turfSheet(t, isNew){
-    var h = '<h3>' + (isNew ? 'New turf' : 'Edit turf') + '</h3><div class="sub">Name the area and who is working it.</div>';
+    // A leader's turf is always their own team; only the pastor picks a team.
+    var team = isPastor() ? (isNew ? '' : (t.data.team || '')) : myTeam;
+    var picked = {};
+    (t.data.whoList || String(t.data.who || '').split(/\s*,\s*|\s+and\s+/)).forEach(function(n){ if (n && n.trim()) picked[n.trim().toLowerCase()] = n.trim(); });
+    var h = '<h3>' + (isNew ? 'New turf' : 'Edit turf') + '</h3><div class="sub">Name the area and tap who is working it.</div>';
     h += '<label>Area name</label><input type="text" id="tname" placeholder="Oak St to Pine St" value="' + esc(t.data.name) + '">';
-    h += '<label>Who has it</label><input type="text" id="twho" list="names" placeholder="Paul and Ryan" value="' + esc(t.data.who) + '">';
-    h += '<datalist id="names">' + knownNames().map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
-    var teams = liveTeams();
-    if (teams.length) {
-      var cur = isNew ? (teamOf(myTeam) ? myTeam : '') : (t.data.team || '');
-      h += '<label>Team</label><select id="tteam"><option value="">No team</option>' + teams.map(function(x){
-        return '<option value="' + x.id + '"' + (x.id === cur ? ' selected' : '') + '>' + esc(x.data.name) + '</option>';
+    if (isPastor()) {
+      h += '<label>Team</label><select id="tteam"><option value="">No team</option>' + liveTeams().map(function(x){
+        return '<option value="' + x.id + '"' + (x.id === team ? ' selected' : '') + '>' + esc(x.data.name) + '</option>';
       }).join('') + '</select>';
+    } else {
+      h += '<label>Team</label><div class="fixed">' + esc(teamName(team)) + '</div>';
     }
-    h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delTurf">Delete</button>') +
+    h += '<label>Who has it</label><div class="pick" id="tpick"></div>';
+    h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delTurf">Delete</button><button id="moveTurf">Corners</button>') +
          '<button id="cancelTurf">Cancel</button><button class="save" id="saveTurf">Save</button></div>';
     openSheet(h);
+    function drawPick(){
+      var people = teamPeople(team);
+      // keep anyone already on this turf even if they have left the team
+      Object.keys(picked).forEach(function(k){ if (!people.some(function(n){ return n.toLowerCase() === k; })) people.push(picked[k]); });
+      $('tpick').innerHTML = people.length ? people.map(function(n, i){
+        return '<button data-i="' + i + '" class="' + (picked[n.toLowerCase()] ? 'on' : '') + '">' + esc(n) + '</button>';
+      }).join('') : '<div class="empty" style="font-size:13.5px">' + (team ? 'Nobody has joined this team yet. Send them the Invite team link and they show up here.' : 'Pick a team first.') + '</div>';
+      Array.prototype.forEach.call(document.querySelectorAll('#tpick button'), function(b){
+        b.addEventListener('click', function(){
+          var n = people[+b.dataset.i], k = n.toLowerCase();
+          if (picked[k]) delete picked[k]; else picked[k] = n;
+          b.classList.toggle('on');
+        });
+      });
+    }
+    drawPick();
+    if ($('tteam')) $('tteam').addEventListener('change', function(){ team = this.value; picked = {}; drawPick(); });
     $('cancelTurf').addEventListener('click', closeSheet);
     $('saveTurf').addEventListener('click', function(){
       t.data.name = $('tname').value.trim() || 'Turf';
-      t.data.who = $('twho').value.trim();
-      if ($('tteam')) t.data.team = $('tteam').value;
+      t.data.whoList = Object.keys(picked).map(function(k){ return picked[k]; });
+      t.data.who = t.data.whoList.join(', ');
+      t.data.team = team;
       save(t); closeSheet();
     });
-    if (!isNew) $('delTurf').addEventListener('click', function(){
-      if (!confirm('Delete the turf "' + (t.data.name || 'Turf') + '"? The houses stay on the map.')) return;
-      t.deleted = true; save(t); closeSheet();
-    });
+    if (!isNew) {
+      $('delTurf').addEventListener('click', function(){
+        if (!confirm('Delete the turf "' + (t.data.name || 'Turf') + '"? The houses stay on the map.')) return;
+        t.deleted = true; save(t); closeSheet();
+      });
+      $('moveTurf').addEventListener('click', function(){ closeSheet(); startDraw(items[t.id]); });
+    }
   }
 
   function inside(pt, poly){
@@ -824,7 +895,7 @@
       h += '<div class="turf"><span class="sw" style="background:' + turfColor(t) + '"></span><div class="t"><b>' + esc(t.data.name || 'Turf') + '</b>' +
            '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + (progressText(hp) || doorsN(n) + ' marked') + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
            (hp.left.length ? '<button data-left="' + t.id + '">Left</button>' : '') +
-           '<button data-go="' + t.id + '">Go</button><button data-ed="' + t.id + '">Edit</button></div>';
+           '<button data-go="' + t.id + '">Go</button>' + (canEditTurf(t) ? '<button data-ed="' + t.id + '">Edit</button>' : '') + '</div>';
     });
     h += '<div class="acts"><button id="closeTurfs">Close</button></div>';
     openSheet(h);
