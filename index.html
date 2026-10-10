@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.14">
+<meta name="x-knock-version" content="v1.15">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -249,6 +249,8 @@
   // Lafayette and Iberia come from the parishes' own address points (with the
   // address); St. Martin and Vermilion from Microsoft roofs (address filled on
   // tap). Fetched a ~1 km cell at a time, kept for the session.
+  // 🔴 The cells are plain files beside this page (houses/<y>_<x>.json), NOT the
+  // JobHub database: loading 190k houses there pushed its disk to 90% full.
   map.createPane('houses').style.zIndex = 440;
   var houseRenderer = L.canvas({ pane:'houses' });
   var houseLayer = L.layerGroup().addTo(map);
@@ -266,12 +268,11 @@
     if (!want.length || want.length > 40) return Promise.resolve(false);
     return Promise.all(want.map(function(k){
       cellState[k] = 'loading';
-      var yx = k.split(':').map(Number), s0 = yx[0] * CELL, w0 = yx[1] * CELL;
-      return fetch(API + 'houses?s=' + s0.toFixed(4) + '&w=' + w0.toFixed(4) + '&n=' + (s0 + CELL).toFixed(4) + '&e=' + (w0 + CELL).toFixed(4))
-        .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
-        .then(function(j){
+      return fetch('houses/' + k.replace(':', '_') + '.json')
+        .then(function(r){ if (r.status === 404) return []; if (!r.ok) throw new Error('http ' + r.status); return r.json(); })   // 404 = no houses there
+        .then(function(list){
           houseCell[k] = [];
-          (j.houses || []).forEach(function(h){
+          (list || []).forEach(function(h){
             var o = { id:h[0], lat:h[1], lng:h[2], addr:h[3] || '' };
             houses[o.id] = o; houseCell[k].push(o);
           });
