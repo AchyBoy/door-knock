@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.7">
+<meta name="x-knock-version" content="v1.7.1">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -968,6 +968,27 @@
   setLayerIcon();
   render();
   watchMe();
+
+  // 🔴 GitHub Pages lets a phone keep the page for 10 minutes, so right after an
+  // update Lizzy opened a new link with the OLD page, which could not read it and
+  // started a blank map. On every open, ask for the newest copy past every cache;
+  // if it is newer, load it under a fresh address (a cache cannot answer that),
+  // once per version so a stale server can never loop it.
+  var MY_VER = document.querySelector('meta[name="x-knock-version"]').content;
+  function checkVersion(){
+    fetch(location.pathname + '?vcheck=' + Date.now(), { cache:'no-store' })
+      .then(function(r){ return r.text(); })
+      .then(function(html){
+        var v = /x-knock-version" content="([^"]+)"/.exec(html);
+        if (!v || v[1] === MY_VER) return;
+        if (sessionStorage.getItem('knock-upd-' + v[1])) return;
+        sessionStorage.setItem('knock-upd-' + v[1], '1');
+        var q = new URLSearchParams(location.search); q.set('v', v[1]);
+        location.replace(location.pathname + '?' + q.toString() + location.hash);
+      }).catch(function(){});
+  }
+  checkVersion();
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) checkVersion(); });
   pull(); flush();
   setInterval(function(){ if (!document.hidden) { pull(); flush(); } }, 8000);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) { pull(); flush(); } });
