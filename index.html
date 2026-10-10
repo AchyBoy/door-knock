@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.7.2">
+<meta name="x-knock-version" content="v1.8">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -304,11 +304,13 @@
     $('me').textContent = 'You: ' + (myName || '?') + (teamOf(myTeam) ? ' · ' + teamName(myTeam) : '') +
       (isPastor() ? ' · Pastor' : isLeader() ? ' · Leader' : '');
     $('reportBtn').style.display = (isPastor() || isLeader()) ? '' : 'none';
-    $('searchBtn').style.display = (isPastor() || isLeader()) ? 'flex' : 'none';
+    // hidden mid-turf too, or a corner tap near the right edge opens search
+    $('searchBtn').style.display = (isPastor() || isLeader()) && !drawing ? 'flex' : 'none';
     // a leader's Share sends the team link, so say so: that is how workers join
     $('shareBtn').textContent = isLeader() ? 'Invite team' : 'Share link';
-    // A worker on a team just marks houses; inviting and turfs are the leader's.
-    var worker = !!teamOf(myTeam) && !isLeader() && !isPastor();
+    // Workers just record the door and what happened. Turfs, inviting and
+    // reports are the leaders' and the pastor's (his rule, 10-10).
+    var worker = !isLeader() && !isPastor();
     if (!drawing) $('bar').style.display = worker ? 'none' : 'flex';
   }
 
@@ -566,6 +568,7 @@
     drawing = true; drawPts = [];
     $('bar').style.display = 'none'; $('drawBar').style.display = 'flex';
     hint('Tap the corners of the turf around the houses. Finish when it is closed in.');
+    $('searchBtn').style.display = 'none';
     drawPreview();
   }
   function endDraw(){
