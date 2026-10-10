@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.3">
+<meta name="x-knock-version" content="v1.4">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -71,6 +71,16 @@
   .turf .t b{display:block; font-size:15px}
   .turf .t span{font-size:12.5px; color:var(--dim)}
   .turf button{border:1px solid var(--line); background:#fff; border-radius:9px; padding:7px 10px; font-size:13px; font-weight:600}
+  .wk{display:flex; align-items:center; gap:8px; margin:4px 0 6px}
+  .wk b{flex:1; text-align:center; font-size:15px}
+  .wk button{border:1px solid var(--line); background:#fff; border-radius:9px; padding:7px 13px; font-size:15px; font-weight:700}
+  .rrow{display:flex; align-items:center; gap:8px; padding:9px 0; border-top:1px solid var(--line); font-size:14.5px}
+  .rrow:first-of-type{border-top:0}
+  .rrow .n{flex:1; min-width:0}
+  .rrow .n span{display:block; font-size:12.5px; color:var(--dim); white-space:pre-wrap}
+  .rrow .c{font-weight:700; white-space:nowrap}
+  .tap{cursor:pointer}
+  .sheet select{width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 11px; font:inherit; font-size:16px; background:#fafafc}
   .empty{color:var(--dim); font-size:14px; padding:6px 0 4px}
   .leaflet-tooltip.turf-lbl{background:rgba(255,255,255,.9); border:0; box-shadow:0 1px 4px rgba(0,0,0,.25); font-weight:700; font-size:12px; padding:3px 7px}
   .leaflet-tooltip.turf-lbl:before{display:none}
@@ -97,6 +107,7 @@
   <button id="drawBtn">✏️ Draw turf</button>
   <button id="turfsBtn">Turfs</button>
   <button id="shareBtn">Share link</button>
+  <button id="reportBtn" style="display:none">Report</button>
 </div>
 <div class="bar" id="drawBar" style="display:none">
   <button id="undoPt">Undo</button>
@@ -129,6 +140,20 @@
   if (!m) history.replaceState(null, '', location.pathname + location.search + '#m=' + MAP);
   localStorage.setItem('knock-last-map', MAP);
 
+  // Who you are on this map rides in the link too, and sticks on the phone:
+  //   &t=<team>              a worker on that leader's team (the team link)
+  //   &t=<team>&L=<key>      that team's leader, sees the team's report
+  //   &p=<key>               the pastor, sees every team and sets up leaders
+  // Workers never pick anything; the link their leader sent does it.
+  function hashArg(k){ var x = new RegExp('[#&]' + k + '=([a-z0-9_-]+)', 'i').exec(location.hash); return x ? x[1].toLowerCase() : ''; }
+  var K_TEAM = 'knock-team-' + MAP, K_LEAD = 'knock-lead-' + MAP, K_PASTOR = 'knock-pastor-' + MAP;
+  if (hashArg('t')) { localStorage.setItem(K_TEAM, hashArg('t')); if (!hashArg('L')) localStorage.removeItem(K_LEAD); }
+  if (hashArg('L')) localStorage.setItem(K_LEAD, hashArg('L'));
+  if (hashArg('p')) localStorage.setItem(K_PASTOR, hashArg('p'));
+  var myTeam = localStorage.getItem(K_TEAM) || '';
+  var myLead = localStorage.getItem(K_LEAD) || '';
+  var myPastor = localStorage.getItem(K_PASTOR) || '';
+
   var K_ITEMS = 'knock-items-' + MAP, K_PEND = 'knock-pend-' + MAP, K_SINCE = 'knock-since-' + MAP;
   function load(k, d){ try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch(e){ return d; } }
   var items = load(K_ITEMS, {});          // id -> { id, kind, data, updatedAt, deleted }
@@ -138,6 +163,14 @@
   function persist(){
     try { localStorage.setItem(K_ITEMS, JSON.stringify(items)); localStorage.setItem(K_PEND, JSON.stringify(pending)); } catch(e){}
   }
+
+  function teamOf(id){ var t = id && items[id]; return t && t.kind === 'team' && !t.deleted ? t : null; }
+  function teamName(id){ var t = teamOf(id); return t ? t.data.name : 'No team'; }
+  function isPastor(){ var a = items.access; return !!(myPastor && a && !a.deleted && a.data.pastorKey === myPastor); }
+  function isLeader(){ var t = teamOf(myTeam); return !!(myLead && t && t.data.leaderKey === myLead); }
+  var BASE = location.origin + location.pathname + '#m=' + MAP;
+  function teamLink(t){ return BASE + '&t=' + t.id; }
+  function leaderLink(t){ return BASE + '&t=' + t.id + '&L=' + t.data.leaderKey; }
 
   // ---- map ----------------------------------------------------------------------
   var map = L.map('map', { zoomControl:false, attributionControl:true, maxZoom:21 });
@@ -229,7 +262,7 @@
       by[p.data.status] = (by[p.data.status] || 0) + 1;
       (p.data.log || []).forEach(function(l){ if (l.who === myName && new Date(l.at).toDateString() === today) mineToday++; });
     });
-    var h = '<span class="chip">' + pins.length + ' doors</span>';
+    var h = '<span class="chip">' + doorsN(pins.length) + '</span>';
     STATUSES.forEach(function(s){
       h += '<span class="chip"><span class="dot" style="background:' + s.color + '"></span>' + (by[s.k] || 0) + ' ' + s.label + '</span>';
     });
@@ -238,7 +271,9 @@
     var meta = items.meta && !items.meta.deleted ? items.meta.data : {};
     $('title').textContent = meta.title || 'Door Knocking';
     document.title = meta.title || 'Door Knocking';
-    $('me').textContent = 'You: ' + (myName || '?');
+    $('me').textContent = 'You: ' + (myName || '?') + (teamOf(myTeam) ? ' · ' + teamName(myTeam) : '') +
+      (isPastor() ? ' · Pastor' : isLeader() ? ' · Leader' : '');
+    $('reportBtn').style.display = (isPastor() || isLeader()) ? '' : 'none';
   }
 
   function renderSync(){
@@ -434,6 +469,7 @@
       // every save goes in the history, with the note and address when they
       // changed, so nothing anybody writes over is lost
       var entry = { status:chosen, who:myName, at:now };
+      if (teamOf(myTeam)) entry.team = myTeam;   // which leader's report this counts in
       if (note !== (d.note || '')) entry.note = note.slice(0, 300);
       if (!isNew && addr !== (d.addr || '')) entry.addr = addr.slice(0, 120);
       d.addr = addr; d.note = note;
@@ -521,6 +557,13 @@
     h += '<label>Area name</label><input type="text" id="tname" placeholder="Oak St to Pine St" value="' + esc(t.data.name) + '">';
     h += '<label>Who has it</label><input type="text" id="twho" list="names" placeholder="Paul and Ryan" value="' + esc(t.data.who) + '">';
     h += '<datalist id="names">' + knownNames().map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+    var teams = liveTeams();
+    if (teams.length) {
+      var cur = isNew ? (teamOf(myTeam) ? myTeam : '') : (t.data.team || '');
+      h += '<label>Team</label><select id="tteam"><option value="">No team</option>' + teams.map(function(x){
+        return '<option value="' + x.id + '"' + (x.id === cur ? ' selected' : '') + '>' + esc(x.data.name) + '</option>';
+      }).join('') + '</select>';
+    }
     h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delTurf">Delete</button>') +
          '<button id="cancelTurf">Cancel</button><button class="save" id="saveTurf">Save</button></div>';
     openSheet(h);
@@ -528,6 +571,7 @@
     $('saveTurf').addEventListener('click', function(){
       t.data.name = $('tname').value.trim() || 'Turf';
       t.data.who = $('twho').value.trim();
+      if ($('tteam')) t.data.team = $('tteam').value;
       save(t); closeSheet();
     });
     if (!isNew) $('delTurf').addEventListener('click', function(){
@@ -553,7 +597,7 @@
       var n = 0, yes = 0;
       pins.forEach(function(p){ if (inside([p.data.lat, p.data.lng], t.data.pts)) { n++; if (p.data.status === 'yes') yes++; } });
       h += '<div class="turf"><span class="sw" style="background:' + turfColor(t) + '"></span><div class="t"><b>' + esc(t.data.name || 'Turf') + '</b>' +
-           '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + n + ' doors' + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
+           '<span>' + (t.data.who ? esc(t.data.who) + ' · ' : 'Nobody yet · ') + doorsN(n) + (yes ? ', ' + yes + ' interested' : '') + '</span></div>' +
            '<button data-go="' + t.id + '">Go</button><button data-ed="' + t.id + '">Edit</button></div>';
     });
     h += '<div class="acts"><button id="closeTurfs">Close</button></div>';
@@ -592,12 +636,158 @@
     save({ id:'meta', kind:'meta', data:{ title:v.trim() } });
   });
 
-  $('shareBtn').addEventListener('click', function(){
-    var url = location.origin + location.pathname + '#m=' + MAP;
-    if (navigator.share) { navigator.share({ title:document.title, url:url }).catch(function(){}); return; }
-    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert('Link copied. Anyone with it sees and marks this same map.'); });
+  function shareUrl(url, title, said){
+    if (navigator.share) { navigator.share({ title:title, url:url }).catch(function(){}); return; }
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert(said); }, function(){ prompt('Copy this link', url); });
     else prompt('Copy this link', url);
+  }
+  // On a team, Share sends the TEAM link, so whoever opens it lands on that team.
+  $('shareBtn').addEventListener('click', function(){
+    var t = teamOf(myTeam);
+    shareUrl(t ? teamLink(t) : BASE, document.title,
+      t ? 'Team link copied. Whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.');
   });
+
+  // ---- teams + weekly report (leaders and the pastor only) -------------------------
+  function doorsN(n){ return n + (n === 1 ? ' door' : ' doors'); }
+  function liveTeams(){ return live('team').sort(function(a, b){ return a.data.name.localeCompare(b.data.name); }); }
+  function weekStart(ms){ var d = new Date(ms); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }   // Sunday
+  function addDays(ms, n){ var d = new Date(ms); d.setDate(d.getDate() + n); return d.getTime(); }
+  function dayLabel(ms){ return new Date(ms).toLocaleDateString([], { month:'short', day:'numeric' }); }
+  var repWeek = weekStart(Date.now()), repTeam = null;   // repTeam: a team id, '' = no team, null = every team
+
+  // One team's week, off the history every save writes. A house counts for a
+  // team if somebody on that team marked it that week; its status is the last
+  // one that team gave it.
+  function teamWeek(teamId, from, to){
+    var people = {}, tot = {}, follow = [], doors = 0, active = {};
+    live('pin').forEach(function(p){
+      var es = (p.data.log || []).filter(function(l){ return l.at >= from && l.at < to && (l.team || '') === teamId; });
+      if (!es.length) return;
+      doors++;
+      es.forEach(function(l){ (people[l.who] = people[l.who] || {})[p.id] = 1; });
+      var last = es[es.length - 1];
+      tot[last.status] = (tot[last.status] || 0) + 1;
+      active[p.id] = 1;
+      if (last.status === 'yes' || last.status === 'back') follow.push({ p:p, l:last });
+    });
+    var turfs = live('turf').filter(function(t){ return (t.data.team || '') === teamId && t.data.pts && t.data.pts.length > 2; }).map(function(t){
+      var all = 0, wk = 0;
+      live('pin').forEach(function(p){
+        if (!inside([p.data.lat, p.data.lng], t.data.pts)) return;
+        all++;
+        if ((p.data.log || []).some(function(l){ return l.at >= from && l.at < to; })) wk++;
+      });
+      return { t:t, all:all, wk:wk };
+    });
+    return { doors:doors, people:people, tot:tot, follow:follow, turfs:turfs };
+  }
+
+  function weekNav(){
+    var to = addDays(repWeek, 7);
+    return '<div class="wk"><button id="wkPrev">◀</button><b>' + dayLabel(repWeek) + ' – ' + dayLabel(addDays(to, -1)) + '</b>' +
+      '<button id="wkNext"' + (to > Date.now() ? ' disabled style="opacity:.35"' : '') + '>▶</button></div>';
+  }
+  function wireWeek(){
+    $('wkPrev').addEventListener('click', function(){ repWeek = addDays(repWeek, -7); report(); });
+    $('wkNext').addEventListener('click', function(){ if (addDays(repWeek, 7) <= Date.now()) { repWeek = addDays(repWeek, 7); report(); } });
+  }
+  function statChips(tot){
+    return '<div class="counts" style="flex-wrap:wrap">' + STATUSES.map(function(s){
+      return '<span class="chip"><span class="dot" style="background:' + s.color + '"></span>' + (tot[s.k] || 0) + ' ' + s.label + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function report(){
+    var to = addDays(repWeek, 7);
+    if (!isPastor()) repTeam = myTeam;              // a leader only ever sees their own team
+    if (repTeam == null) return reportAll(to);
+    var w = teamWeek(repTeam, repWeek, to);
+    var h = '<h3>' + esc(teamName(repTeam)) + '</h3><div class="sub">Weekly report, Sunday to Saturday</div>' + weekNav();
+    h += '<div class="rrow"><div class="n">Doors knocked</div><div class="c">' + w.doors + '</div></div>' + statChips(w.tot);
+    h += '<label>Doors per person</label>';
+    var ppl = Object.keys(w.people).map(function(n){ return [n, Object.keys(w.people[n]).length]; }).sort(function(a, b){ return b[1] - a[1]; });
+    h += ppl.length ? ppl.map(function(x){ return '<div class="rrow"><div class="n">' + esc(x[0]) + '</div><div class="c">' + x[1] + '</div></div>'; }).join('')
+                    : '<div class="empty">Nobody on this team marked a door this week.</div>';
+    h += '<label>Interested and come back</label>';
+    h += w.follow.length ? w.follow.sort(function(a, b){ return a.l.at - b.l.at; }).map(function(f){
+      var s = STAT[f.l.status];
+      return '<div class="rrow tap" data-pin="' + f.p.id + '"><span class="dot" style="background:' + s.color + '"></span><div class="n">' +
+        esc(f.p.data.addr || 'No address') + '<span>' + s.label + ' · ' + esc(f.l.who) + ' · ' + when(f.l.at) +
+        (f.p.data.note ? '\n“' + esc(f.p.data.note) + '”' : '') + '</span></div></div>';
+    }).join('') : '<div class="empty">None this week.</div>';
+    h += '<label>Turfs</label>';
+    h += w.turfs.length ? w.turfs.map(function(x){
+      return '<div class="rrow"><span class="dot" style="background:' + turfColor(x.t) + '"></span><div class="n">' + esc(x.t.data.name || 'Turf') +
+        '<span>' + x.wk + ' this week</span></div><div class="c">' + doorsN(x.all) + ' marked</div></div>';
+    }).join('') : '<div class="empty">No turf drawn for this team. Pick the team when you draw or edit one.</div>';
+    h += '<div class="acts">' + (isPastor() ? '<button id="repBack">All teams</button>' : '') + '<button id="repClose">Close</button></div>';
+    openSheet(h);
+    wireWeek();
+    $('repClose').addEventListener('click', closeSheet);
+    if ($('repBack')) $('repBack').addEventListener('click', function(){ repTeam = null; report(); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pin]'), function(r){
+      r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
+    });
+  }
+
+  function reportAll(to){
+    var rows = liveTeams().map(function(t){ return [t.id, t.data.name]; });
+    rows.push(['', 'No team']);
+    var all = { doors:0, tot:{} };
+    var h = '<h3>All teams</h3><div class="sub">Weekly report, Sunday to Saturday. Tap a team for the detail.</div>' + weekNav();
+    var body = rows.map(function(r){
+      var w = teamWeek(r[0], repWeek, to);
+      if (r[0] === '' && !w.doors) return '';
+      all.doors += w.doors;
+      STATUSES.forEach(function(s){ all.tot[s.k] = (all.tot[s.k] || 0) + (w.tot[s.k] || 0); });
+      return '<div class="rrow tap" data-team="' + r[0] + '"><div class="n">' + esc(r[1]) + '<span>' +
+        (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + Object.keys(w.people).length + ' people</span></div>' +
+        '<div class="c">' + doorsN(w.doors) + ' ›</div></div>';
+    }).join('');
+    h += '<div class="rrow"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + '</div></div>' + statChips(all.tot);
+    h += '<label>Teams</label>' + (liveTeams().length ? body : '<div class="empty">No leaders set up yet. Tap Leaders to add them.</div>' + body);
+    h += '<div class="acts"><button id="repTeams">Leaders</button><button id="repClose">Close</button></div>';
+    openSheet(h);
+    wireWeek();
+    $('repClose').addEventListener('click', closeSheet);
+    $('repTeams').addEventListener('click', teamsSetup);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-team]'), function(r){
+      r.addEventListener('click', function(){ repTeam = r.dataset.team; report(); });
+    });
+  }
+
+  // Pastor only: add a leader, send them their link.
+  function teamsSetup(){
+    var h = '<h3>Leaders</h3><div class="sub">Add each leader, then send them their leader link. They send their team the team link from their own Share button.</div>';
+    var teams = liveTeams();
+    h += teams.length ? teams.map(function(t){
+      return '<div class="turf"><div class="t"><b>' + esc(t.data.name) + '</b></div>' +
+        '<button data-lead="' + t.id + '">Leader link</button><button data-del="' + t.id + '">✕</button></div>';
+    }).join('') : '<div class="empty">No leaders yet.</div>';
+    h += '<label>Add a leader</label><input type="text" id="newLead" placeholder="e.g. Bro Paul">';
+    h += '<div class="acts"><button id="tsBack">Back</button><button class="save" id="tsAdd">Add</button></div>';
+    h += '<label>Your pastor link</label><div class="empty">Only for you and the pastor. It sees every team.</div>' +
+         '<div class="acts" style="margin-top:6px"><button id="tsPastor">Send pastor link</button></div>';
+    openSheet(h);
+    $('tsBack').addEventListener('click', function(){ repTeam = null; report(); });
+    $('tsAdd').addEventListener('click', function(){
+      var n = $('newLead').value.trim(); if (!n) return $('newLead').focus();
+      save({ id:'tm' + rid(10), kind:'team', data:{ name:n, leaderKey:rid(12) } });
+      teamsSetup();
+    });
+    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.'); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-lead]'), function(b){
+      b.addEventListener('click', function(){ var t = items[b.dataset.lead];
+        shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.'); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(b){
+      b.addEventListener('click', function(){ var t = JSON.parse(JSON.stringify(items[b.dataset.del]));
+        if (!confirm('Remove ' + t.data.name + ' as a leader? Doors their team marked stay on the map.')) return;
+        t.deleted = true; save(t); teamsSetup(); });
+    });
+  }
+  $('reportBtn').addEventListener('click', function(){ repTeam = isPastor() ? null : myTeam; report(); });
 
   // ---- locate + layer ----------------------------------------------------------------
   // The map opens where you are standing, and the blue dot follows you as you
