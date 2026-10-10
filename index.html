@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.9.1">
+<meta name="x-knock-version" content="v1.10">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -193,6 +193,13 @@
   function isPastor(){ var a = items.access; return !!(myPastor && a && !a.deleted && a.data.pastorKey === myPastor); }
   function isLeader(){ var t = teamOf(myTeam); return !!(myLead && t && t.data.leaderKey === myLead); }
   var BASE = location.origin + location.pathname + '?m=' + MAP;
+
+  // 🔴 Who you are lives in THIS browser's storage, and every browser has its own
+  // (the one Messages opens is not Safari). So the address bar always carries
+  // your whole link: a bookmark, a Home Screen icon, history or a reopened tab
+  // brings the leader back as the leader. Invite team still sends the worker link.
+  history.replaceState(null, '', location.pathname + '?m=' + MAP +
+    (myTeam ? '&t=' + myTeam : '') + (myLead ? '&L=' + myLead : '') + (myPastor ? '&p=' + myPastor : ''));
 
   // Each phone on a team checks in by itself, so a leader sees who has joined
   // before they mark a single door. The worker does nothing; it is one row per
@@ -794,6 +801,8 @@
       return '<div class="rrow"><span class="dot" style="background:' + turfColor(x.t) + '"></span><div class="n">' + esc(x.t.data.name || 'Turf') +
         '<span>' + x.wk + ' this week</span></div><div class="c">' + doorsN(x.all) + ' marked</div></div>';
     }).join('') : '<div class="empty">No turf drawn for this team. Pick the team when you draw or edit one.</div>';
+    if (!isPastor()) h += '<div class="empty" style="font-size:13px; margin-top:14px">Tip: in Safari tap Share, then Add to Home Screen. ' +
+      'The icon always opens the map as you, the leader, on any day.</div>';
     h += '<div class="acts">' + (isPastor() ? '<button id="repBack">All teams</button>' : '') + '<button id="repClose">Close</button></div>';
     openSheet(h);
     wireWeek();
