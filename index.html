@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.8">
+<meta name="x-knock-version" content="v1.9">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -193,6 +193,19 @@
   function isPastor(){ var a = items.access; return !!(myPastor && a && !a.deleted && a.data.pastorKey === myPastor); }
   function isLeader(){ var t = teamOf(myTeam); return !!(myLead && t && t.data.leaderKey === myLead); }
   var BASE = location.origin + location.pathname + '?m=' + MAP;
+
+  // Each phone on a team checks in by itself, so a leader sees who has joined
+  // before they mark a single door. The worker does nothing; it is one row per
+  // phone, refreshed at most every few hours.
+  var K_MEMBER = 'knock-member-' + MAP;
+  var memberId = localStorage.getItem(K_MEMBER) || ('mb' + rid(10));
+  localStorage.setItem(K_MEMBER, memberId);
+  function checkIn(){
+    if (!myName || !teamOf(myTeam)) return;
+    var cur = items[memberId], d = cur && !cur.deleted ? cur.data : null;
+    if (d && d.team === myTeam && d.name === myName && !!d.lead === isLeader() && Date.now() - d.seen < 4 * 3600e3) return;
+    save({ id:memberId, kind:'member', data:{ name:myName, team:myTeam, lead:isLeader(), seen:Date.now() } });
+  }
   function teamLink(t){ return BASE + '&t=' + t.id; }
   function leaderLink(t){ return BASE + '&t=' + t.id + '&L=' + t.data.leaderKey; }
 
@@ -369,6 +382,7 @@
           if (pending[x.id] && x.updatedAt >= cur.updatedAt) delete pending[x.id];
         });
         since = j.now || since;
+        if (!fullPulled) setTimeout(checkIn, 0);   // the team row is only known once the map has loaded
         fullPulled = true;
         localStorage.setItem(K_SINCE, JSON.stringify(since));
         if (changed) { persist(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
@@ -665,6 +679,7 @@
     function go(){
       var v = el.value.trim(); if (!v) return el.focus();
       myName = v; localStorage.setItem('knock-name', v);
+      checkIn();
       closeSheet(); if (then) then();
     }
     $('nmSave').addEventListener('click', go);
@@ -749,10 +764,24 @@
     var w = teamWeek(repTeam, repWeek, to);
     var h = '<h3>' + esc(teamName(repTeam)) + '</h3><div class="sub">Weekly report, Sunday to Saturday</div>' + weekNav();
     h += '<div class="rrow"><div class="n">Doors knocked</div><div class="c">' + w.doors + '</div></div>' + statChips(w.tot);
-    h += '<label>Doors per person</label>';
-    var ppl = Object.keys(w.people).map(function(n){ return [n, Object.keys(w.people[n]).length]; }).sort(function(a, b){ return b[1] - a[1]; });
-    h += ppl.length ? ppl.map(function(x){ return '<div class="rrow"><div class="n">' + esc(x[0]) + '</div><div class="c">' + x[1] + '</div></div>'; }).join('')
-                    : '<div class="empty">Nobody on this team marked a door this week.</div>';
+    // Team: everyone whose phone opened this team's link, plus anyone who marked
+    // a door for it, with this week's doors beside each (0 shows who is idle).
+    var team = {};
+    function person(n){ var k = String(n || '').trim().toLowerCase(); if (!k) return null; return team[k] = team[k] || { name:n, doors:0, seen:0, lead:false }; }
+    live('member').forEach(function(mb){
+      if (mb.data.team !== repTeam) return;
+      var x = person(mb.data.name); if (!x) return;
+      x.seen = Math.max(x.seen, mb.data.seen || 0); x.lead = x.lead || !!mb.data.lead;
+    });
+    Object.keys(w.people).forEach(function(n){ var x = person(n); if (x) x.doors = Object.keys(w.people[n]).length; });
+    var roster = Object.keys(team).map(function(k){ return team[k]; }).sort(function(a, b){ return (b.lead - a.lead) || (b.doors - a.doors) || a.name.localeCompare(b.name); });
+    h += '<label>Team' + (roster.length ? ' (' + roster.length + ')' : '') + ' · doors this week</label>';
+    h += roster.length ? roster.map(function(x){
+      return '<div class="rrow"><div class="n">' + esc(x.name) + (x.lead ? ' <b style="font-size:11px; color:#1f4fd1">LEADER</b>' : '') +
+        (x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : '') + '</div><div class="c">' + x.doors + '</div></div>';
+    }).join('') : '';
+    h += '<div class="empty" style="font-size:13px">' + (roster.length ? '' : 'Nobody yet. ') +
+      'Anyone who opens this team\'s Invite team link shows up here.</div>';
     h += '<label>Interested and come back</label>';
     h += w.follow.length ? w.follow.sort(function(a, b){ return a.l.at - b.l.at; }).map(function(f){
       var s = STAT[f.l.status];
