@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.5.2">
+<meta name="x-knock-version" content="v1.6">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -163,6 +163,10 @@
   var myTeam = localStorage.getItem(K_TEAM) || '';
   var myLead = localStorage.getItem(K_LEAD) || '';
   var myPastor = localStorage.getItem(K_PASTOR) || '';
+  // 🔴 Safari opens a link to this page in the tab ALREADY on it and only swaps
+  // the #part, without reloading, so a new team link was never read and the
+  // worker stayed off the team. Any new link reloads.
+  window.addEventListener('hashchange', function(){ location.reload(); });
 
   var K_ITEMS = 'knock-items-' + MAP, K_PEND = 'knock-pend-' + MAP, K_SINCE = 'knock-since-' + MAP;
   function load(k, d){ try { var v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch(e){ return d; } }
@@ -217,10 +221,11 @@
   // ---- layout: keep the floating buttons clear of the bars ---------------------
   function layout(){
     var topH = document.querySelector('.top').offsetHeight;
-    var barH = ($('bar').style.display === 'none' ? $('drawBar') : $('bar')).offsetHeight;
-    $('locate').style.bottom = (barH + 12) + 'px';
-    $('layer').style.bottom = (barH + 64) + 'px';
-    $('searchBtn').style.bottom = (barH + 116) + 'px';
+    var bar = $('bar').style.display !== 'none' ? $('bar') : $('drawBar').style.display !== 'none' ? $('drawBar') : null;
+    var base = bar ? bar.offsetHeight + 'px' : 'env(safe-area-inset-bottom) + 14px';
+    $('locate').style.bottom = 'calc(' + base + ' + 12px)';
+    $('layer').style.bottom = 'calc(' + base + ' + 64px)';
+    $('searchBtn').style.bottom = 'calc(' + base + ' + 116px)';
     $('fbar').style.top = (topH + 8) + 'px';
     $('hint').style.top = (topH + (mapFilter ? 60 : 10)) + 'px';
   }
@@ -292,6 +297,9 @@
     $('searchBtn').style.display = (isPastor() || isLeader()) ? 'flex' : 'none';
     // a leader's Share sends the team link, so say so: that is how workers join
     $('shareBtn').textContent = isLeader() ? 'Invite team' : 'Share link';
+    // A worker on a team just marks houses; inviting and turfs are the leader's.
+    var worker = !!teamOf(myTeam) && !isLeader() && !isPastor();
+    if (!drawing) $('bar').style.display = worker ? 'none' : 'flex';
   }
 
   function renderSync(){
