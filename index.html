@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.7.1">
+<meta name="x-knock-version" content="v1.7.2">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -350,8 +350,11 @@
       .catch(function(){ flushing = false; renderSync(); setTimeout(flush, 6000); });
   }
 
+  var fullPulled = false;
   function pull(){
-    fetch(API + MAP + '?since=' + Math.max(0, since - 15000))
+    // The first pull of every open asks for the WHOLE map, so a phone whose saved
+    // copy fell out of step (Lizzy's showed 1 door of 2) heals by just opening.
+    fetch(API + MAP + '?since=' + (fullPulled ? Math.max(0, since - 15000) : 0))
       .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
       .then(function(j){
         var changed = false;
@@ -364,6 +367,7 @@
           if (pending[x.id] && x.updatedAt >= cur.updatedAt) delete pending[x.id];
         });
         since = j.now || since;
+        fullPulled = true;
         localStorage.setItem(K_SINCE, JSON.stringify(since));
         if (changed) { persist(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
         if (locFailed) fitPins();
