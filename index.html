@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.9">
+<meta name="x-knock-version" content="v1.9.1">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -815,7 +815,7 @@
       all.doors += w.doors;
       STATUSES.forEach(function(s){ all.tot[s.k] = (all.tot[s.k] || 0) + (w.tot[s.k] || 0); });
       return '<div class="rrow tap" data-team="' + r[0] + '"><div class="n">' + esc(r[1]) + '<span>' +
-        (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + peopleN(Object.keys(w.people).length) + '</span></div>' +
+        (w.tot.yes || 0) + ' interested · ' + (w.tot.back || 0) + ' come back · ' + peopleN(Object.keys(w.people).length) + ' knocked</span></div>' +
         '<div class="c">' + doorsN(w.doors) + ' ›</div></div>';
     }).join('');
     h += '<div class="rrow"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + '</div></div>' + statChips(all.tot);
