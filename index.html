@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.0">
+<meta name="x-knock-version" content="v1.1">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -408,7 +408,15 @@
   map.on('click', function(e){
     if (drawing) { drawPts.push([e.latlng.lat, e.latlng.lng]); drawPreview(); return; }
     var near = nearestPin(e.latlng);
-    if (near) openPin(near); else newPin(e.latlng);
+    if (near) return openPin(near);
+    // zoomed out, one tap covers a whole block: zoom in rather than guess a house
+    if (map.getZoom() < 17) {
+      map.setView(e.latlng, 18);
+      hint('Zoomed in. Now tap the house.');
+      setTimeout(function(){ if (!drawing) hint(''); }, 2500);
+      return;
+    }
+    newPin(e.latlng);
   });
 
   // ---- turf -------------------------------------------------------------------------
