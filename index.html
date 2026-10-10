@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.11">
+<meta name="x-knock-version" content="v1.12">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -183,6 +183,10 @@
   var items = load(K_ITEMS, {});          // id -> { id, kind, data, updatedAt, deleted }
   var pending = load(K_PEND, {});         // id -> true, written here and not yet on the server
   var since = load(K_SINCE, 0);
+  // A personal link can carry the person's name (&n=Amy%20Hebert), so they never
+  // type it. The link wins over whatever this phone had.
+  var linkName = (new URLSearchParams(location.search).get('n') || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (linkName) localStorage.setItem('knock-name', linkName);
   var myName = localStorage.getItem('knock-name') || '';
   function persist(){
     try { localStorage.setItem(K_ITEMS, JSON.stringify(items)); localStorage.setItem(K_PEND, JSON.stringify(pending)); } catch(e){}
@@ -199,7 +203,8 @@
   // your whole link: a bookmark, a Home Screen icon, history or a reopened tab
   // brings the leader back as the leader. Invite team still sends the worker link.
   history.replaceState(null, '', location.pathname + '?m=' + MAP +
-    (myTeam ? '&t=' + myTeam : '') + (myLead ? '&L=' + myLead : '') + (myPastor ? '&p=' + myPastor : ''));
+    (myTeam ? '&t=' + myTeam : '') + (myLead ? '&L=' + myLead : '') + (myPastor ? '&p=' + myPastor : '') +
+    (linkName ? '&n=' + encodeURIComponent(linkName) : ''));
 
   // Each phone on a team checks in by itself, so a leader sees who has joined
   // before they mark a single door. The worker does nothing; it is one row per
@@ -321,7 +326,7 @@
     var meta = items.meta && !items.meta.deleted ? items.meta.data : {};
     $('title').textContent = meta.title || 'Door Knocking';
     document.title = meta.title || 'Door Knocking';
-    $('me').textContent = 'You: ' + (myName || '?') + (teamOf(myTeam) ? ' · ' + teamName(myTeam) : '') +
+    $('me').textContent = 'You: ' + (myName || '?') + (teamOf(myTeam) && !same(teamName(myTeam), myName) ? ' · ' + teamName(myTeam) : '') +
       (isPastor() ? ' · Pastor' : isLeader() ? ' · Leader' : '');
     $('reportBtn').style.display = (isPastor() || isLeader()) ? '' : 'none';
     // hidden mid-turf too, or a corner tap near the right edge opens search
