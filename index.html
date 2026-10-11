@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.17">
+<meta name="x-knock-version" content="v1.18">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -250,9 +250,14 @@
   // (the one Messages opens is not Safari). So the address bar always carries
   // your whole link: a bookmark, a Home Screen icon, history or a reopened tab
   // brings the leader back as the leader. Invite team still sends the worker link.
-  history.replaceState(null, '', location.pathname + '?m=' + MAP +
-    (myTeam ? '&t=' + myTeam : '') + (myLead ? '&L=' + myLead : '') + (myPastor ? '&p=' + myPastor : '') +
-    (linkName ? '&n=' + encodeURIComponent(linkName) : ''));
+  // ...and the name too, typed or from the link, so the address bar IS this
+  // person's own link: a Home Screen icon opens as them in any browser.
+  function setAddressBar(){
+    history.replaceState(null, '', location.pathname + '?m=' + MAP +
+      (myTeam ? '&t=' + myTeam : '') + (myLead ? '&L=' + myLead : '') + (myPastor ? '&p=' + myPastor : '') +
+      (myName ? '&n=' + encodeURIComponent(myName) : ''));
+  }
+  setAddressBar();
 
   // Each phone on a team checks in by itself, so a leader sees who has joined
   // before they mark a single door. The worker does nothing; it is one row per
@@ -535,7 +540,7 @@
         }, 0);   // the team and role are only known once the map has loaded
         fullPulled = true;
         localStorage.setItem(K_SINCE, JSON.stringify(since));
-        if (changed) { persist(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
+        if (changed) { persist(); adoptMerge(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
         if (locFailed) fitPins();
       })
       .catch(function(){});
@@ -894,10 +899,24 @@
 
   // Everyone on a team: phones that opened its link, plus anyone who has
   // marked a door for it.
+  // ---- merged names --------------------------------------------------------------
+  // "Amy H" and "Amy Hebert" on one team are one person once a leader merges
+  // them: an item per merge (kind meta, data {merge:true, team, from, to}),
+  // applied wherever a name is counted. Undo = delete the item.
+  function merges(){ return live('meta').filter(function(m){ return m.data && m.data.merge; }); }
+  function canon(name, team){
+    var n = String(name || '').trim(), seen = 0, ms = merges();
+    while (seen++ < 6) {
+      var hit = ms.filter(function(m){ return (m.data.team || '') === (team || '') && same(m.data.from, n); })[0];
+      if (!hit) break;
+      n = hit.data.to;
+    }
+    return n;
+  }
   function teamPeople(teamId){
     var s = {};
-    live('member').forEach(function(m){ if (m.data.team === teamId && m.data.name) s[m.data.name.trim().toLowerCase()] = m.data.name.trim(); });
-    live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.team === teamId && l.who) s[l.who.trim().toLowerCase()] = s[l.who.trim().toLowerCase()] || l.who.trim(); }); });
+    live('member').forEach(function(m){ if (m.data.team === teamId && m.data.name) { var n = canon(m.data.name, teamId); s[n.toLowerCase()] = n; } });
+    live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.team === teamId && l.who) { var n = canon(l.who, teamId); s[n.toLowerCase()] = s[n.toLowerCase()] || n; } }); });
     return Object.keys(s).map(function(k){ return s[k]; }).sort(function(a, b){ return a.localeCompare(b); });
   }
   // every change to a turf is kept on it: who, what, when
@@ -1061,6 +1080,7 @@
       var oldName = myName;
       myName = v; localStorage.setItem('knock-name', v);
       track('name.set', { from:oldName, to:v });
+      setAddressBar();
       checkIn();
       closeSheet(); if (then) then();
     }
@@ -1107,7 +1127,7 @@
       var es = (p.data.log || []).filter(function(l){ return l.at >= from && l.at < to && (l.team || '') === teamId; });
       if (!es.length) return;
       doors++;
-      es.forEach(function(l){ (people[l.who] = people[l.who] || {})[p.id] = 1; });
+      es.forEach(function(l){ var n = canon(l.who, l.team); (people[n] = people[n] || {})[p.id] = 1; });
       var last = es[es.length - 1];
       tot[last.status] = (tot[last.status] || 0) + 1;
       active[p.id] = 1;
@@ -1148,7 +1168,7 @@
     var out = [];
     live('pin').forEach(function(p){
       var es = (p.data.log || []).filter(function(l){
-        return l.at >= from && l.at < to && (teamId == null || (l.team || '') === teamId) && (!f.who || same(l.who, f.who));
+        return l.at >= from && l.at < to && (teamId == null || (l.team || '') === teamId) && (!f.who || same(canon(l.who, l.team), f.who));
       });
       if (!es.length) return;
       var last = es[es.length - 1];
@@ -1158,7 +1178,7 @@
     return out.sort(function(a, b){ return b.l.at - a.l.at; });
   }
   var reopenList = null;
-  function houseList(title, sub, rows, back){
+  function houseList(title, sub, rows, back, mergeFrom){
     var h = '<h3>' + esc(title) + '</h3><div class="sub">' + esc(sub) + ' · ' + (rows.length === 1 ? '1 house' : rows.length + ' houses') + '</div>';
     h += rows.length ? rows.map(function(r){
       var s = STAT[r.l.status] || STAT.noans, d = r.p.data;
@@ -1166,9 +1186,11 @@
         esc(d.addr || 'No address') + '<span>' + s.label + ' · ' + esc(r.l.who) + ' · ' + when(r.l.at) +
         (d.note ? '\n“' + esc(d.note) + '”' : '') + '</span></div><div class="c">›</div></div>';
     }).join('') : '<div class="empty">No houses.</div>';
-    h += '<div class="acts"><button id="hlBack">Back</button>' + (rows.length ? '<button class="save" id="hlMap">Show on map</button>' : '') + '</div>';
+    h += '<div class="acts"><button id="hlBack">Back</button>' + (mergeFrom ? '<button id="hlMerge">Merge into…</button>' : '') +
+      (rows.length ? '<button class="save" id="hlMap">Show on map</button>' : '') + '</div>';
     openSheet(h);
     $('hlBack').addEventListener('click', back);
+    if ($('hlMerge')) $('hlMerge').addEventListener('click', function(){ mergeSheet(mergeFrom.name, mergeFrom.team, function(){ houseList(title, sub, rows, back, mergeFrom); }); });
     Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pin]'), function(r){
       r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
     });
@@ -1180,6 +1202,47 @@
       showFbar(rows.length, title);
     });
   }
+  // Count one name as another on this team, from now on and backwards.
+  function mergeSheet(from, team, back){
+    var others = teamPeople(team).filter(function(n){ return !same(n, from); });
+    var mine = merges().filter(function(m){ return (m.data.team || '') === team; });
+    var h = '<h3>Merge ' + esc(from) + '</h3><div class="sub">Pick who ' + esc(from) + ' really is. Their doors count as that person in every report, and their phone switches to that name next time it opens.</div>';
+    h += others.length ? '<div class="pick">' + others.map(function(n, i){ return '<button data-to="' + i + '">' + esc(n) + '</button>'; }).join('') + '</div>'
+                       : '<div class="empty">Nobody else on this team to merge with.</div>';
+    if (mine.length) h += '<label>Merged on this team</label>' + mine.map(function(m){
+      return '<div class="rrow"><div class="n">' + esc(m.data.from) + ' → ' + esc(m.data.to) + '<span>by ' + esc(m.data.by || '') + ', ' + when(m.data.at) + '</span></div><button class="qd" data-undo="' + m.id + '">Undo</button></div>';
+    }).join('');
+    h += '<div class="acts"><button id="mgBack">Back</button></div>';
+    openSheet(h);
+    $('mgBack').addEventListener('click', back);
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-to]'), function(b){
+      b.addEventListener('click', function(){
+        var to = others[+b.dataset.to];
+        if (!confirm('Count ' + from + ' as ' + to + '?')) return;
+        save({ id:'mg' + rid(10), kind:'meta', data:{ merge:true, team:team, from:from, to:to, by:myName, at:Date.now() } });
+        track('person.merge', { team:team, from:from, to:to });
+        report();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-undo]'), function(b){
+      b.addEventListener('click', function(){
+        var m = JSON.parse(JSON.stringify(items[b.dataset.undo])); m.deleted = true; save(m);
+        track('person.unmerge', { team:m.data.team, from:m.data.from, to:m.data.to });
+        mergeSheet(from, team, back);
+      });
+    });
+  }
+  // A phone whose name was merged away takes the right name by itself.
+  function adoptMerge(){
+    if (!myName || !teamOf(myTeam)) return;
+    var n = canon(myName, myTeam);
+    if (n && !same(n, myName)) {
+      var old = myName; myName = n; localStorage.setItem('knock-name', n);
+      track('name.merged', { from:old, to:n });
+      setAddressBar(); checkIn(); renderCounts();
+    }
+  }
+
   // wire the report's tappable numbers: the total, each status, each person
   function wireTaps(teamId, title, to, roster){
     var sub = dayLabel(repWeek) + ' – ' + dayLabel(addDays(to, -1)), back = function(){ report(); };
@@ -1191,7 +1254,7 @@
     });
     Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-who]'), function(c){
       c.addEventListener('click', function(){ var x = roster[+c.dataset.who];
-        houseList(x.name, sub, weekHouses(teamId, repWeek, to, { who:x.name }), back); });
+        houseList(x.name, sub, weekHouses(teamId, repWeek, to, { who:x.name }), back, teamId != null ? { name:x.name, team:teamId } : null); });
     });
   }
 
@@ -1237,9 +1300,12 @@
     'team.remove':function(e){ return 'removed leader ' + e.data.name; },
     'campaign.set':function(e){ return 'started outreach “' + e.data.name + '”'; },
     'campaign.end':function(e){ return 'ended outreach “' + e.data.name + '”'; },
-    'name.set':function(e){ return 'set their name to ' + e.data.to; }
+    'name.set':function(e){ return 'set their name to ' + e.data.to; },
+    'name.merged':function(e){ return 'was switched from ' + e.data.from + ' to ' + e.data.to + ' (merged)'; },
+    'person.merge':function(e){ return 'merged ' + e.data.from + ' into ' + e.data.to; },
+    'person.unmerge':function(e){ return 'undid the merge of ' + e.data.from + ' into ' + e.data.to; }
   };
-  var EVGROUP = { marks:['pin.save'], opens:['open'], changes:['pin.remove','pin.restore','follow.set','turf.create','turf.edit','turf.corners','turf.delete','team.add','team.remove','campaign.set','campaign.end','name.set','share'], searches:['search.houses','search.place','report.view','activity.view'] };
+  var EVGROUP = { marks:['pin.save'], opens:['open'], changes:['person.merge','person.unmerge','name.merged','pin.remove','pin.restore','follow.set','turf.create','turf.edit','turf.corners','turf.delete','team.add','team.remove','campaign.set','campaign.end','name.set','share'], searches:['search.houses','search.place','report.view','activity.view'] };
   var actFilter = 'all';
   function activitySheet(teamId){
     var to = addDays(repWeek, 7), list = weekEvents(teamId, repWeek, to, function(){ if ($('actList')) activitySheet(teamId); });
@@ -1373,13 +1439,13 @@
     var evs = weekEvents(repTeam, repWeek, to, function(){ if (document.querySelector('#sheet .wk') && $('repClose')) report(); });
     var active = {};   // name -> { days:{}, last }
     (evs || []).forEach(function(e){ if (e.kind !== 'open' && e.kind !== 'pin.save') return;
-      var k = String(e.who || '').trim().toLowerCase(), a = active[k] = active[k] || { days:{}, last:0 };
+      var k = canon(e.who, e.team).toLowerCase(), a = active[k] = active[k] || { days:{}, last:0 };
       a.days[new Date(e.at).toDateString()] = 1; a.last = Math.max(a.last, e.at); });
     h += '<div class="rrow tap" data-all="1"><div class="n">Doors knocked</div><div class="c">' + w.doors + ' ›</div></div>' + statChips(w.tot);
     // Team: everyone whose phone opened this team's link, plus anyone who marked
     // a door for it, with this week's doors beside each (0 shows who is idle).
     var team = {};
-    function person(n){ var k = String(n || '').trim().toLowerCase(); if (!k) return null; return team[k] = team[k] || { name:n, doors:0, seen:0, lead:false }; }
+    function person(n){ n = canon(n, repTeam); var k = String(n || '').trim().toLowerCase(); if (!k) return null; return team[k] = team[k] || { name:n, doors:0, seen:0, lead:false }; }
     live('member').forEach(function(mb){
       if (mb.data.team !== repTeam) return;
       var x = person(mb.data.name); if (!x) return;
