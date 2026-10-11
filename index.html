@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.19">
+<meta name="x-knock-version" content="v1.20">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -189,6 +189,13 @@
   //   &p=<key>               the pastor, sees every team and sets up leaders
   // Workers never pick anything; the link their leader sent does it.
   var K_TEAM = 'knock-team-' + MAP, K_LEAD = 'knock-lead-' + MAP, K_PASTOR = 'knock-pastor-' + MAP;
+  // 🔴 A team link with no name in it, opened by a phone that remembers a name
+  // from somewhere else (another team, a leader link, a shared phone): ask, with
+  // that name filled in. Amanda opened the Invite team link and came up as
+  // "Josh Lewis", the name left behind by testing Josh's leader link.
+  var prevTeam = localStorage.getItem(K_TEAM) || '';
+  var confirmJoin = !!(linkArg('t') && !new URLSearchParams(location.search).get('n') && !linkArg('L') &&
+    linkArg('t') !== prevTeam && localStorage.getItem('knock-name'));
   if (linkArg('t')) { localStorage.setItem(K_TEAM, linkArg('t')); if (!linkArg('L')) localStorage.removeItem(K_LEAD); }
   if (linkArg('L')) localStorage.setItem(K_LEAD, linkArg('L'));
   if (linkArg('p')) localStorage.setItem(K_PASTOR, linkArg('p'));
@@ -535,6 +542,7 @@
         });
         since = j.now || since;
         if (!fullPulled) setTimeout(function(){
+          if (confirmJoin && teamOf(myTeam) && !sheetOpen) askName(null, true);
           checkIn();
           track('open', { v:MY_VER, ua:navigator.userAgent.slice(0, 160), w:screen.width, h:screen.height,
             standalone:!!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) });
@@ -1070,12 +1078,13 @@
   });
 
   // ---- name, title, share ----------------------------------------------------------
-  function askName(then){
-    var h = '<h3>What is your name?</h3><div class="sub">Every house you mark shows who knocked it.</div>' +
+  function askName(then, joining){
+    var h = (joining ? '<h3>Joining ' + esc(teamName(myTeam)) + '\'s team</h3><div class="sub">Is this your name? If not, put yours in, then Save.</div>'
+                     : '<h3>What is your name?</h3><div class="sub">Every house you mark shows who knocked it.</div>') +
             '<input type="text" id="nm" placeholder="Your first name" value="' + esc(myName) + '" autocomplete="given-name">' +
             '<div class="acts"><button class="save" id="nmSave">Save</button></div>';
     openSheet(h);
-    var el = $('nm'); setTimeout(function(){ el.focus(); }, 50);
+    var el = $('nm'); setTimeout(function(){ el.focus(); if (joining) el.select(); }, 50);
     function go(){
       var v = el.value.trim(); if (!v) return el.focus();
       var oldName = myName;
