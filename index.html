@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.21">
+<meta name="x-knock-version" content="v1.22">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -1558,11 +1558,12 @@
 
   // Pastor only: add a leader, send them their link.
   function teamsSetup(){
-    var h = '<h3>Leaders</h3><div class="sub">Add each leader, then send them their leader link. They send their team the team link from their own Share button.</div>';
+    var h = '<h3>Leaders</h3><div class="sub">To make someone a leader: type their name and tap Add &amp; send. Their leader link opens in your share sheet. They invite their own workers from inside it.</div>';
     var teams = liveTeams();
     h += teams.length ? teams.map(function(t){
       return '<div class="turf"><div class="t"><b>' + esc(t.data.name) + '</b></div>' +
-        '<button data-lead="' + t.id + '">Leader link</button><button data-tlink="' + t.id + '">Team link</button><button data-del="' + t.id + '">✕</button></div>';
+        '<button data-lead="' + t.id + '" style="background:#1f4fd1; border-color:#1f4fd1; color:#fff">Send leader link</button>' +
+        '<button data-tlink="' + t.id + '">Worker invite</button><button data-del="' + t.id + '">✕</button></div>';
     }).join('') : '<div class="empty">No leaders yet.</div>';
     // the current outreach: every door marked while it is set carries its name
     var cc = items.campaign && !items.campaign.deleted ? items.campaign.data : {};
@@ -1570,7 +1571,7 @@
       '<div style="display:flex; gap:8px"><input type="text" id="campName" placeholder="e.g. Fall revival" value="' + esc(cc.name || '') + '" style="flex:1">' +
       '<button id="campSave" class="qd">Set</button>' + (cc.name ? '<button id="campEnd" class="qd">End</button>' : '') + '</div>';
     h += '<label>Add a leader</label><input type="text" id="newLead" placeholder="e.g. Bro Paul">';
-    h += '<div class="acts"><button id="tsBack">Back</button><button class="save" id="tsAdd">Add</button></div>';
+    h += '<div class="acts"><button id="tsBack">Back</button><button class="save" id="tsAdd">Add &amp; send</button></div>';
     h += '<label>Your pastor link</label><div class="empty">Only for you and the pastor. It sees every team.</div>' +
          '<div class="acts" style="margin-top:6px"><button id="tsPastor">Send pastor link</button></div>';
     openSheet(h);
@@ -1587,9 +1588,13 @@
     if ($('campEnd')) $('campEnd').addEventListener('click', function(){ if (confirm('End the current outreach?')) setCampaign(''); });
     $('tsAdd').addEventListener('click', function(){
       var n = $('newLead').value.trim(); if (!n) return $('newLead').focus();
-      save({ id:'tm' + rid(10), kind:'team', data:{ name:n, leaderKey:rid(12), addedBy:myName, addedAt:Date.now() } });
+      var nt = { id:'tm' + rid(10), kind:'team', data:{ name:n, leaderKey:rid(12), addedBy:myName, addedAt:Date.now() } };
+      save(nt);
       track('team.add', { name:n });
       teamsSetup();
+      // still inside the tap, so the phone lets the share sheet open
+      shareUrl(leaderLink(nt), 'Door knocking, ' + n, 'Leader link for ' + n + ' copied. Send it to them only.', 'leader:' + n,
+        n + ', this is your LEADER link for door knocking. Keep it to yourself; use Invite team inside it to bring your people in.');
     });
     $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.', 'pastor',
       'The pastor link for door knocking. It sees every team and adds the leaders. Keep it private.'); });
@@ -1603,6 +1608,7 @@
         shareUrl(teamLink(t), 'Door knocking, ' + t.data.name + '\'s team', 'Team link for ' + t.data.name + ' copied.', 'invite:' + t.data.name,
           'Door knocking with ' + t.data.name + '\'s team. Tap to open the map, then put in your name.'); });
     });
+
     Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(b){
       b.addEventListener('click', function(){ var t = JSON.parse(JSON.stringify(items[b.dataset.del]));
         if (!confirm('Remove ' + t.data.name + ' as a leader? Doors their team marked stay on the map.')) return;
