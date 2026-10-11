@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.22">
+<meta name="x-knock-version" content="v1.23">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -479,7 +479,10 @@
     // hidden mid-turf too, or a corner tap near the right edge opens search
     $('searchBtn').style.display = (isPastor() || isLeader()) && !drawing ? 'flex' : 'none';
     // a leader's Share sends the team link, so say so: that is how workers join
-    $('shareBtn').textContent = isLeader() ? 'Invite team' : 'Share link';
+    // 🔴 The pastor's bottom button used to share the PLAIN map link (no team,
+    // no leader); a test invite went out that way and made nobody anything.
+    // The pastor's job is leaders, so the button opens Leaders.
+    $('shareBtn').textContent = isLeader() ? 'Invite team' : isPastor() ? 'Leaders' : 'Share link';
     // Workers just record the door and what happened. Turfs, inviting and
     // reports are the leaders' and the pastor's (his rule, 10-10).
     var worker = !isLeader() && !isPastor();
@@ -1116,6 +1119,7 @@
   }
   // On a team, Share sends the TEAM link, so whoever opens it lands on that team.
   $('shareBtn').addEventListener('click', function(){
+    if (isPastor() && !isLeader()) return teamsSetup();
     var t = teamOf(myTeam);
     shareUrl(t ? teamLink(t) : BASE, document.title,
       t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.', t ? 'invite' : 'map',
