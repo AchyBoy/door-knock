@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.23">
+<meta name="x-knock-version" content="v1.24">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -1576,8 +1576,6 @@
       '<button id="campSave" class="qd">Set</button>' + (cc.name ? '<button id="campEnd" class="qd">End</button>' : '') + '</div>';
     h += '<label>Add a leader</label><input type="text" id="newLead" placeholder="e.g. Bro Paul">';
     h += '<div class="acts"><button id="tsBack">Back</button><button class="save" id="tsAdd">Add &amp; send</button></div>';
-    h += '<label>Your pastor link</label><div class="empty">Only for you and the pastor. It sees every team.</div>' +
-         '<div class="acts" style="margin-top:6px"><button id="tsPastor">Send pastor link</button></div>';
     openSheet(h);
     $('tsBack').addEventListener('click', function(){ repTeam = null; report(); });
     function setCampaign(name){
@@ -1600,8 +1598,6 @@
       shareUrl(leaderLink(nt), 'Door knocking, ' + n, 'Leader link for ' + n + ' copied. Send it to them only.', 'leader:' + n,
         n + ', this is your LEADER link for door knocking. Keep it to yourself; use Invite team inside it to bring your people in.');
     });
-    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.', 'pastor',
-      'The pastor link for door knocking. It sees every team and adds the leaders. Keep it private.'); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-lead]'), function(b){
       b.addEventListener('click', function(){ var t = items[b.dataset.lead];
         shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.', 'leader:' + t.data.name,
