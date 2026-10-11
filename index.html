@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.18">
+<meta name="x-knock-version" content="v1.19">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -272,7 +272,8 @@
     save({ id:memberId, kind:'member', data:{ name:myName, team:myTeam, lead:isLeader(), seen:Date.now() } });
   }
   function teamLink(t){ return BASE + '&t=' + t.id; }
-  function leaderLink(t){ return BASE + '&t=' + t.id + '&L=' + t.data.leaderKey; }
+  function personLink(teamId, name){ return BASE + '&t=' + teamId + '&n=' + encodeURIComponent(name); }
+  function leaderLink(t){ return BASE + '&t=' + t.id + '&L=' + t.data.leaderKey + '&n=' + encodeURIComponent(t.data.name); }
 
   // ---- map ----------------------------------------------------------------------
   var map = L.map('map', { zoomControl:false, attributionControl:true, maxZoom:21 });
@@ -1096,9 +1097,11 @@
     save({ id:'meta', kind:'meta', data:{ title:v.trim() } });
   });
 
-  function shareUrl(url, title, said, which){
+  // Opens the phone's own share sheet (Messages, WhatsApp, Mail…); a computer
+  // without one copies the link instead.
+  function shareUrl(url, title, said, which, text){
     track('share', { which:which || 'map', url:url.replace(/&L=[^&]+/, '&L=…').replace(/&p=[^&]+/, '&p=…') });
-    if (navigator.share) { navigator.share({ title:title, url:url }).catch(function(){}); return; }
+    if (navigator.share) { navigator.share(text ? { title:title, text:text, url:url } : { title:title, url:url }).catch(function(){}); return; }
     if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert(said); }, function(){ prompt('Copy this link', url); });
     else prompt('Copy this link', url);
   }
@@ -1106,7 +1109,8 @@
   $('shareBtn').addEventListener('click', function(){
     var t = teamOf(myTeam);
     shareUrl(t ? teamLink(t) : BASE, document.title,
-      t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.', t ? 'invite' : 'map');
+      t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.', t ? 'invite' : 'map',
+      t ? 'Door knocking with ' + t.data.name + '\'s team. Tap to open the map, then put in your name.' : '');
   });
 
   // ---- teams + weekly report (leaders and the pastor only) -------------------------
@@ -1245,6 +1249,15 @@
 
   // wire the report's tappable numbers: the total, each status, each person
   function wireTaps(teamId, title, to, roster){
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pshare]'), function(b){
+      b.addEventListener('click', function(e){
+        e.stopPropagation();   // the row behind it opens the person's houses
+        var x = roster[+b.dataset.pshare];
+        shareUrl(personLink(teamId, x.name), 'Door knocking, ' + x.name,
+          'Link for ' + x.name + ' copied.', 'person:' + x.name,
+          x.name + ', this is your door knocking link for ' + teamName(teamId) + '\'s team. Tap it to open the map.');
+      });
+    });
     var sub = dayLabel(repWeek) + ' – ' + dayLabel(addDays(to, -1)), back = function(){ report(); };
     var all = document.querySelector('#sheet [data-all]');
     if (all) all.addEventListener('click', function(){ houseList(title + ', doors knocked', sub, weekHouses(teamId, repWeek, to, {}), back); });
@@ -1291,7 +1304,11 @@
     'turf.edit':function(e){ return 'changed turf ' + e.data.name + (e.data.who ? ' (' + e.data.who + ')' : ''); },
     'turf.corners':function(e){ return 'moved the corners of ' + e.data.name; },
     'turf.delete':function(e){ return 'deleted turf ' + e.data.name; },
-    'share':function(e){ return 'sent the ' + String(e.data.which || 'map').replace('leader:', 'leader link for ').replace('invite', 'team invite').replace('pastor', 'pastor') + ' link'; },
+    'share':function(e){ var w = String(e.data.which || 'map');
+      if (w.indexOf('person:') === 0) return 'sent ' + w.slice(7) + ' their own link';
+      if (w.indexOf('leader:') === 0) return 'sent the leader link for ' + w.slice(7);
+      if (w.indexOf('invite:') === 0) return 'sent the team link for ' + w.slice(7);
+      return 'sent the ' + (w === 'invite' ? 'team invite' : w) + ' link'; },
     'search.houses':function(e){ return 'searched houses for “' + e.data.q + '”'; },
     'search.place':function(e){ return 'looked up ' + (e.data.picked || e.data.q); },
     'report.view':function(e){ return 'opened the report'; },
@@ -1458,10 +1475,11 @@
       return '<div class="rrow tap" data-who="' + i + '"><div class="n">' + esc(x.name) + (x.lead ? ' <b style="font-size:11px; color:#1f4fd1">LEADER</b>' : '') +
         (function(){ var a = active[String(x.name).trim().toLowerCase()];
           if (a) { var n = Object.keys(a.days).length; return '<span>On the map ' + n + (n === 1 ? ' day' : ' days') + ' this week · last ' + when(a.last) + '</span>'; }
-          return x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : ''; })() + '</div><div class="c">' + x.doors + ' ›</div></div>';
+          return x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : ''; })() + '</div>' +
+        (x.lead ? '' : '<button class="qd" data-pshare="' + i + '">Share link</button>') + '<div class="c">' + x.doors + ' ›</div></div>';
     }).join('') : '';
     h += '<div class="empty" style="font-size:13px">' + (roster.length ? '' : 'Nobody yet. ') +
-      'Anyone who opens this team\'s Invite team link shows up here.</div>';
+      'Anyone who opens this team\'s Invite team link shows up here. Share link sends a person their own link, their name already in it.</div>';
     h += '<label>Interested and come back</label>';
     h += w.follow.length ? w.follow.sort(function(a, b){ return a.l.at - b.l.at; }).map(function(f){
       var s = STAT[f.l.status];
@@ -1535,7 +1553,7 @@
     var teams = liveTeams();
     h += teams.length ? teams.map(function(t){
       return '<div class="turf"><div class="t"><b>' + esc(t.data.name) + '</b></div>' +
-        '<button data-lead="' + t.id + '">Leader link</button><button data-del="' + t.id + '">✕</button></div>';
+        '<button data-lead="' + t.id + '">Leader link</button><button data-tlink="' + t.id + '">Team link</button><button data-del="' + t.id + '">✕</button></div>';
     }).join('') : '<div class="empty">No leaders yet.</div>';
     // the current outreach: every door marked while it is set carries its name
     var cc = items.campaign && !items.campaign.deleted ? items.campaign.data : {};
@@ -1564,10 +1582,17 @@
       track('team.add', { name:n });
       teamsSetup();
     });
-    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.', 'pastor'); });
+    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.', 'pastor',
+      'The pastor link for door knocking. It sees every team and adds the leaders. Keep it private.'); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-lead]'), function(b){
       b.addEventListener('click', function(){ var t = items[b.dataset.lead];
-        shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.', 'leader:' + t.data.name); });
+        shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.', 'leader:' + t.data.name,
+          t.data.name + ', this is your LEADER link for door knocking. Keep it to yourself; use Invite team inside it to bring your people in.'); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-tlink]'), function(b){
+      b.addEventListener('click', function(){ var t = items[b.dataset.tlink];
+        shareUrl(teamLink(t), 'Door knocking, ' + t.data.name + '\'s team', 'Team link for ' + t.data.name + ' copied.', 'invite:' + t.data.name,
+          'Door knocking with ' + t.data.name + '\'s team. Tap to open the map, then put in your name.'); });
     });
     Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(b){
       b.addEventListener('click', function(){ var t = JSON.parse(JSON.stringify(items[b.dataset.del]));
