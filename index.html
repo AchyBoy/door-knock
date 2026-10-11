@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
-<meta name="x-knock-version" content="v1.16">
+<meta name="x-knock-version" content="v1.17">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Door Knocking</title>
@@ -97,6 +97,7 @@
   .pick{display:flex; flex-wrap:wrap; gap:7px}
   .pick button{border:1.5px solid var(--line); background:#fff; border-radius:999px; padding:8px 13px; font-size:14.5px; font-weight:600}
   .pick button.on{background:#1f4fd1; border-color:#1f4fd1; color:#fff}
+  .qd{border:1px solid var(--line); background:#fff; border-radius:9px; padding:9px 8px; font-size:13px; font-weight:600; white-space:nowrap}
   .fixed{border:1px solid var(--line); border-radius:10px; padding:10px 11px; font-size:16px; background:#f4f4f7; color:var(--dim)}
   .leaflet-tooltip.turf-lbl{background:rgba(255,255,255,.9); border:0; box-shadow:0 1px 4px rgba(0,0,0,.25); font-weight:700; font-size:12px; padding:3px 7px}
   .leaflet-tooltip.turf-lbl:before{display:none}
@@ -147,8 +148,20 @@
     { k:'noans', label:'No answer',      color:'#e8a317' },
     { k:'noint', label:'Not interested', color:'#e5534b' },
     { k:'yes',   label:'Interested',     color:'#24a35f' },
-    { k:'back',  label:'Come back',      color:'#3b82f6' }
+    { k:'back',  label:'Come back',      color:'#3b82f6' },
+    { k:'dnk',   label:'Do not knock',   color:'#111827' },
+    { k:'vac',   label:'Vacant / not a house', color:'#64748b' }
   ];
+  // After Interested, the leader's follow-up; never set by the worker.
+  var FOLLOW = [
+    { k:'',        label:'Not yet' },
+    { k:'called',  label:'Called' },
+    { k:'visited', label:'Visited' },
+    { k:'study',   label:'Bible study' },
+    { k:'church',  label:'Came to church' },
+    { k:'noreach', label:'Could not reach' }
+  ];
+  var FOL = {}; FOLLOW.forEach(function(f){ FOL[f.k] = f; });
   var STAT = {}; STATUSES.forEach(function(s){ STAT[s.k] = s; });
   var TURF_COLORS = ['#8b5cf6','#ec4899','#f97316','#14b8a6','#0ea5e9','#84cc16','#a855f7','#ef4444'];
 
@@ -199,6 +212,32 @@
   var myName = localStorage.getItem('knock-name') || '';
   function persist(){
     try { localStorage.setItem(K_ITEMS, JSON.stringify(items)); localStorage.setItem(K_PEND, JSON.stringify(pending)); } catch(e){}
+  }
+
+  // ---- the activity log: who did what, when ------------------------------------
+  // Every action goes in a queue on the phone and is sent in batches, so a dead
+  // signal loses nothing. Nobody is asked anything; it only records.
+  var K_EVQ = 'knock-evq-' + MAP, evq = load(K_EVQ, []), evBusy = false;
+  function track(kind, data){
+    evq.push({ at:Date.now(), who:myName || '', team:teamOf(myTeam) ? myTeam : '',
+      role:isPastor() ? 'pastor' : isLeader() ? 'leader' : 'worker', kind:kind, data:data || {} });
+    if (evq.length > 800) evq = evq.slice(-800);
+    evCache = {};   // anything this phone just did must show in the next Activity look
+    try { localStorage.setItem(K_EVQ, JSON.stringify(evq)); } catch(e){}
+    flushEvents();
+  }
+  function flushEvents(){
+    if (evBusy || !evq.length) return;
+    evBusy = true;
+    var batch = evq.slice(0, 50);
+    fetch(API + MAP + '/events', { method:'POST', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ events:batch }) })
+      .then(function(r){ if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .then(function(){
+        evq.splice(0, batch.length);
+        try { localStorage.setItem(K_EVQ, JSON.stringify(evq)); } catch(e){}
+        evBusy = false; if (evq.length) flushEvents();
+      })
+      .catch(function(){ evBusy = false; });
   }
 
   function teamOf(id){ var t = id && items[id]; return t && t.kind === 'team' && !t.deleted ? t : null; }
@@ -293,9 +332,9 @@
   function computeDone(){
     doneHouse = {};
     live('pin').forEach(function(p){
-      if (p.data.house) { doneHouse[p.data.house] = 1; return; }
+      if (p.data.house) { doneHouse[p.data.house] = p.data.status || 1; return; }
       var near = nearHouse(L.latLng(p.data.lat, p.data.lng), 12);
-      if (near) doneHouse[near.id] = 1;
+      if (near) doneHouse[near.id] = p.data.status || 1;
     });
   }
   function nearHouse(ll, meters, skipDone){
@@ -489,7 +528,11 @@
           if (pending[x.id] && x.updatedAt >= cur.updatedAt) delete pending[x.id];
         });
         since = j.now || since;
-        if (!fullPulled) setTimeout(checkIn, 0);   // the team row is only known once the map has loaded
+        if (!fullPulled) setTimeout(function(){
+          checkIn();
+          track('open', { v:MY_VER, ua:navigator.userAgent.slice(0, 160), w:screen.width, h:screen.height,
+            standalone:!!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) });
+        }, 0);   // the team and role are only known once the map has loaded
         fullPulled = true;
         localStorage.setItem(K_SINCE, JSON.stringify(since));
         if (changed) { persist(); if (!sheetOpen) render(); else { renderPins(); renderTurfs(); renderCounts(); } }
@@ -549,6 +592,17 @@
       .catch(function(){ if (mine === geoSeq) cb(''); });
   }
 
+  function ymd(dt){ return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0'); }
+  function dayName(s){ if (!s) return ''; var p = s.split('-'); var dt = new Date(+p[0], +p[1] - 1, +p[2], 12);
+    return dt.toLocaleDateString([], { weekday:'short', month:'short', day:'numeric' }); }
+  // leaders see whether a door was marked at the door or somewhere else
+  function stoodLine(l){
+    var st = l.stood; if (!st) return '';
+    if (st.none) return '<div class="ln" style="color:var(--dim)">📍 no location from the phone</div>';
+    var far = st.m > 80, txt = st.m < 1000 ? st.m + ' m' : (st.m / 1000).toFixed(1) + ' km';
+    return '<div class="ln" style="color:' + (far ? '#c2410c' : '#15803d') + '">📍 marked ' + txt + ' from the house' + (st.acc > 50 ? ' (phone unsure, ±' + st.acc + ' m)' : '') + '</div>';
+  }
+  function currentCampaign(){ var c = items.campaign; return c && !c.deleted && c.data.name ? c.data.name : ''; }
   function creator(d){ return d.by || (d.log && d.log[0] && d.log[0].who) || ''; }
   function same(a, b){ return !!a && String(a).trim().toLowerCase() === String(b || '').trim().toLowerCase(); }
 
@@ -616,17 +670,46 @@
     STATUSES.forEach(function(s){
       h += '<button data-k="' + s.k + '" style="border-color:' + s.color + '"><span class="dot" style="background:' + s.color + '"></span>' + s.label + '</button>';
     });
-    h += '</div><label>Note</label><textarea id="note" placeholder="Names, prayer request, best time to come back…">' + esc(d.note) + '</textarea>';
+    h += '</div>';
+    // Interested / Come back: who to call, and when to come back
+    var c = d.contact || {};
+    h += '<div id="contactBox" style="display:none"><label>Name and phone (optional)</label>' +
+      '<div style="display:flex; gap:8px"><input type="text" id="cname" placeholder="Name" value="' + esc(c.name) + '" autocomplete="off" style="flex:1">' +
+      '<input type="text" id="cphone" inputmode="tel" placeholder="Phone" value="' + esc(c.phone) + '" autocomplete="off" style="flex:1"></div></div>';
+    h += '<div id="backBox" style="display:none"><label>Come back on</label>' +
+      '<div style="display:flex; gap:8px; align-items:center"><input type="date" id="backOn" value="' + esc(d.backOn || '') + '" style="flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 10px; font:inherit; font-size:16px; background:#fafafc">' +
+      '<button type="button" class="qd" data-d="1">Tomorrow</button><button type="button" class="qd" data-d="sat">Sat</button><button type="button" class="qd" data-d="7">+1 wk</button></div></div>';
+    h += '<label>Note</label><textarea id="note" placeholder="Prayer request, best time to come back…">' + esc(d.note) + '</textarea>';
+    if (!isNew && c.phone) {
+      var tel = String(c.phone).replace(/[^0-9+]/g, '');
+      h += '<div class="acts" style="margin-top:10px"><a href="tel:' + esc(tel) + '" style="flex:1; text-align:center; text-decoration:none; border:1px solid var(--line); border-radius:12px; padding:12px; font-weight:700; color:var(--ink)">📞 Call ' + esc(c.name || '') + '</a>' +
+        '<a href="sms:' + esc(tel) + '" style="flex:1; text-align:center; text-decoration:none; border:1px solid var(--line); border-radius:12px; padding:12px; font-weight:700; color:var(--ink)">💬 Text</a></div>';
+    }
+    // the leader's follow-up after Interested (saves by itself, it is not a knock)
+    var lead = isPastor() || isLeader();
+    if (!isNew && lead && (d.status === 'yes' || d.follow)) {
+      h += '<label>Follow-up (leaders only)</label><select id="follow">' + FOLLOW.map(function(f){
+        return '<option value="' + f.k + '"' + ((d.follow ? d.follow.step : '') === f.k ? ' selected' : '') + '>' + f.label + '</option>';
+      }).join('') + '</select>' + (d.follow && d.follow.step ? '<div class="empty" style="font-size:12.5px">Set by ' + esc(d.follow.who) + ', ' + when(d.follow.at) + '</div>' : '');
+    }
     if (!isNew && d.log && d.log.length) {
       h += '<label>History</label><ul class="log">' + d.log.slice().reverse().map(function(l){
         var s = STAT[l.status] || STAT.noans;
         return '<li><div class="lh"><span class="dot" style="background:' + s.color + '"></span>' + s.label + ' · ' + esc(l.who) + ' · ' + when(l.at) + '</div>' +
           (l.addr != null ? '<div class="ln">Address: ' + esc(l.addr || '(blank)') + '</div>' : '') +
-          (l.note != null ? '<div class="ln">“' + esc(l.note || '(note cleared)') + '”</div>' : '') + '</li>';
+          (l.contact ? '<div class="ln">Contact: ' + esc([l.contact.name, l.contact.phone].filter(Boolean).join(', ') || '(cleared)') + '</div>' : '') +
+          (l.backOn ? '<div class="ln">Come back on ' + esc(dayName(l.backOn)) + '</div>' : '') +
+          (l.note != null ? '<div class="ln">“' + esc(l.note || '(note cleared)') + '”</div>' : '') +
+          (lead ? stoodLine(l) : '') + '</li>';
+      }).join('') + '</ul>';
+    }
+    if (!isNew && lead && d.followLog && d.followLog.length) {
+      h += '<label>Follow-up history</label><ul class="log">' + d.followLog.slice().reverse().map(function(f){
+        return '<li><div class="lh">' + esc((FOL[f.step] || FOL['']).label) + ' · ' + esc(f.who) + ' · ' + when(f.at) + '</div></li>';
       }).join('') + '</ul>';
     }
     // anyone can update a house, only whoever put the dot there can remove it
-    var canRemove = !isNew && same(creator(d), myName);
+    var canRemove = !isNew && (same(creator(d), myName) || isLeader() || isPastor());
     h += '<div class="acts">' + (canRemove ? '<button class="del" id="delPin">Remove</button>' : '') +
          '<button id="cancelPin">Cancel</button><button class="save" id="savePin">Save</button></div>';
     openSheet(h, true);
@@ -641,7 +724,26 @@
         b.classList.toggle('on', on);
         b.style.background = on ? s.color : '#fff';
       });
+      $('contactBox').style.display = chosen === 'yes' || chosen === 'back' ? 'block' : 'none';
+      $('backBox').style.display = chosen === 'back' ? 'block' : 'none';
     }
+    Array.prototype.forEach.call(document.querySelectorAll('.qd'), function(b){
+      b.addEventListener('click', function(){
+        var dt = new Date(); dt.setHours(12, 0, 0, 0);
+        if (b.dataset.d === 'sat') dt.setDate(dt.getDate() + ((6 - dt.getDay() + 7) % 7 || 7));
+        else dt.setDate(dt.getDate() + Number(b.dataset.d));
+        $('backOn').value = ymd(dt);
+      });
+    });
+    if ($('follow')) $('follow').addEventListener('change', function(){
+      var step = this.value, cur = items[it.id]; if (!cur) return;
+      var x = JSON.parse(JSON.stringify(cur)), now = Date.now();
+      x.data.follow = { step:step, who:myName, at:now };
+      x.data.followLog = (x.data.followLog || []).concat([{ step:step, who:myName, at:now }]).slice(-30);
+      save(x);
+      track('follow.set', { id:x.id, addr:x.data.addr, step:step });
+      setSub('Follow-up saved: ' + (FOL[step] || FOL['']).label + '.');
+    });
     paint();
     Array.prototype.forEach.call(document.querySelectorAll('.stat button'), function(b){
       b.addEventListener('click', function(){ chosen = b.dataset.k; paint(); });
@@ -654,19 +756,38 @@
       if (!d.by) d.by = creator(d) || myName;
       // every save goes in the history, with the note and address when they
       // changed, so nothing anybody writes over is lost
-      var entry = { status:chosen, who:myName, at:now };
+      var entry = { status:chosen, who:myName, at:now }, prev = d.status || '';
       if (teamOf(myTeam)) entry.team = myTeam;   // which leader's report this counts in
+      var camp = currentCampaign(); if (camp) entry.camp = camp;
+      // where the phone was when this was saved, and how far from the house
+      if (myPos && now - myPos.t < 3 * 60e3) entry.stood = { lat:+myPos.lat.toFixed(6), lng:+myPos.lng.toFixed(6), acc:myPos.acc,
+        m:Math.round(map.distance([myPos.lat, myPos.lng], [d.lat, d.lng])), age:Math.round((now - myPos.t) / 1000) };
+      else entry.stood = { none:true };
+      if (chosen === 'yes' || chosen === 'back') {
+        var cn = $('cname').value.trim().slice(0, 60), cp = $('cphone').value.trim().slice(0, 30), oc = d.contact || {};
+        if (cn !== (oc.name || '') || cp !== (oc.phone || '')) { entry.contact = { name:cn, phone:cp }; d.contact = cn || cp ? { name:cn, phone:cp } : null; }
+      }
+      if (chosen === 'back') {
+        var bo = $('backOn').value || '';
+        if (bo !== (d.backOn || '')) entry.backOn = bo;
+        d.backOn = bo;
+      } else if (d.backOn) { d.backOn = ''; }
       if (note !== (d.note || '')) entry.note = note.slice(0, 300);
       if (!isNew && addr !== (d.addr || '')) entry.addr = addr.slice(0, 120);
       d.addr = addr; d.note = note;
       d.log = (d.log || []).concat([entry]).slice(-40);
       d.status = chosen; d.who = myName; d.at = now;
       save(it);
+      track('pin.save', { id:it.id, house:d.house || '', addr:d.addr, status:chosen, prev:prev, isNew:isNew,
+        m:entry.stood.m, acc:entry.stood.acc, noLoc:!!entry.stood.none, camp:camp || '' });
       closeSheet();
     });
     if (canRemove) $('delPin').addEventListener('click', function(){
-      if (!confirm('Remove this house from the map?')) return;
-      it.deleted = true; save(it); closeSheet();
+      if (!confirm('Remove this house from the map? A leader can put it back.')) return;
+      d.removedBy = myName; d.removedAt = Date.now();
+      it.deleted = true; save(it);
+      track('pin.remove', { id:it.id, addr:d.addr, status:d.status });
+      closeSheet();
     });
   }
 
@@ -760,6 +881,7 @@
     if (drawPts.length < 3) return;
     if (editingTurf) {
       var t0 = JSON.parse(JSON.stringify(editingTurf)); t0.data.pts = drawPts.slice();
+      turfHist(t0, 'corners');
       endDraw(); save(t0); hint('Turf updated.'); setTimeout(function(){ if (!drawing) hint(''); }, 2000);
       return;
     }
@@ -778,6 +900,11 @@
     live('pin').forEach(function(p){ (p.data.log || []).forEach(function(l){ if (l.team === teamId && l.who) s[l.who.trim().toLowerCase()] = s[l.who.trim().toLowerCase()] || l.who.trim(); }); });
     return Object.keys(s).map(function(k){ return s[k]; }).sort(function(a, b){ return a.localeCompare(b); });
   }
+  // every change to a turf is kept on it: who, what, when
+  function turfHist(t, what){
+    t.data.hist = (t.data.hist || []).concat([{ what:what, who:myName, at:Date.now() }]).slice(-50);
+    track('turf.' + what, { id:t.id, name:t.data.name || '', team:t.data.team || '', who:t.data.who || '' });
+  }
   function canEditTurf(t){ return isPastor() || (isLeader() && (t.data.team || '') === myTeam); }
 
   function turfSheet(t, isNew){
@@ -795,6 +922,9 @@
       h += '<label>Team</label><div class="fixed">' + esc(teamName(team)) + '</div>';
     }
     h += '<label>Who has it</label><div class="pick" id="tpick"></div>';
+    var TW = { create:'drew it', edit:'changed the name or people', corners:'moved the corners', delete:'deleted it' };
+    if (!isNew && t.data.hist && t.data.hist.length) h += '<label>History</label><ul class="log">' + t.data.hist.slice().reverse().map(function(x){
+      return '<li><div class="lh">' + esc(x.who) + ' ' + (TW[x.what] || x.what) + ' · ' + when(x.at) + '</div></li>'; }).join('') + '</ul>';
     h += '<div class="acts">' + (isNew ? '' : '<button class="del" id="delTurf">Delete</button><button id="moveTurf">Corners</button>') +
          '<button id="cancelTurf">Cancel</button><button class="save" id="saveTurf">Save</button></div>';
     openSheet(h);
@@ -817,16 +947,19 @@
     if ($('tteam')) $('tteam').addEventListener('change', function(){ team = this.value; picked = {}; drawPick(); });
     $('cancelTurf').addEventListener('click', closeSheet);
     $('saveTurf').addEventListener('click', function(){
+      var before = JSON.stringify([t.data.name, t.data.who, t.data.team]);
       t.data.name = $('tname').value.trim() || 'Turf';
       t.data.whoList = Object.keys(picked).map(function(k){ return picked[k]; });
       t.data.who = t.data.whoList.join(', ');
       t.data.team = team;
+      if (isNew) turfHist(t, 'create');
+      else if (before !== JSON.stringify([t.data.name, t.data.who, t.data.team])) turfHist(t, 'edit');
       save(t); closeSheet();
     });
     if (!isNew) {
       $('delTurf').addEventListener('click', function(){
         if (!confirm('Delete the turf "' + (t.data.name || 'Turf') + '"? The houses stay on the map.')) return;
-        t.deleted = true; save(t); closeSheet();
+        turfHist(t, 'delete'); t.deleted = true; save(t); closeSheet();
       });
       $('moveTurf').addEventListener('click', function(){ closeSheet(); startDraw(items[t.id]); });
     }
@@ -848,6 +981,7 @@
       if (cellState[k] !== 'done') out.loaded = false;
       (houseCell[k] || []).forEach(function(h){
         if (!inside([h.lat, h.lng], t.data.pts)) return;
+        if (doneHouse[h.id] === 'vac') { out.vacant = (out.vacant || 0) + 1; return; }   // not a house: out of the count
         out.total++;
         if (doneHouse[h.id]) out.done++; else out.left.push(h);
       });
@@ -924,7 +1058,9 @@
     var el = $('nm'); setTimeout(function(){ el.focus(); }, 50);
     function go(){
       var v = el.value.trim(); if (!v) return el.focus();
+      var oldName = myName;
       myName = v; localStorage.setItem('knock-name', v);
+      track('name.set', { from:oldName, to:v });
       checkIn();
       closeSheet(); if (then) then();
     }
@@ -940,7 +1076,8 @@
     save({ id:'meta', kind:'meta', data:{ title:v.trim() } });
   });
 
-  function shareUrl(url, title, said){
+  function shareUrl(url, title, said, which){
+    track('share', { which:which || 'map', url:url.replace(/&L=[^&]+/, '&L=…').replace(/&p=[^&]+/, '&p=…') });
     if (navigator.share) { navigator.share({ title:title, url:url }).catch(function(){}); return; }
     if (navigator.clipboard) navigator.clipboard.writeText(url).then(function(){ alert(said); }, function(){ prompt('Copy this link', url); });
     else prompt('Copy this link', url);
@@ -949,7 +1086,7 @@
   $('shareBtn').addEventListener('click', function(){
     var t = teamOf(myTeam);
     shareUrl(t ? teamLink(t) : BASE, document.title,
-      t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.');
+      t ? 'Team link copied. Text it to your workers: whoever opens it is on ' + t.data.name + '.' : 'Link copied. Anyone with it sees and marks this same map.', t ? 'invite' : 'map');
   });
 
   // ---- teams + weekly report (leaders and the pastor only) -------------------------
@@ -1058,12 +1195,186 @@
     });
   }
 
+  // ---- activity for the report: fetched once per week+team, then cached -----------
+  var evCache = {};
+  // Answers at once with what it has, and refetches when that is over 15 s old
+  // (the first copy used to stick, so a leader's own removals never showed).
+  // Sends this phone's queued events first, so the list includes them.
+  function weekEvents(teamId, from, to, cb){
+    var key = (teamId == null ? '*' : teamId) + '|' + from, c = evCache[key];
+    if ((!c || Date.now() - c.t > 15000) && !evCache[key + '!']) {
+      evCache[key + '!'] = 1;
+      flushEvents();
+      setTimeout(function(){
+        fetch(API + MAP + '/events?from=' + from + '&to=' + to + '&limit=2000' + (teamId == null ? '' : '&team=' + encodeURIComponent(teamId)))
+          .then(function(r){ return r.json(); })
+          .then(function(j){
+            evCache[key] = { list:j.events || [], t:Date.now() }; delete evCache[key + '!'];
+            if (cb) cb();   // safe: the redraw finds a fresh copy and does not fetch again
+          })
+          .catch(function(){ delete evCache[key + '!']; });
+      }, evq.length ? 1200 : 0);
+    }
+    return c ? c.list : null;
+  }
+  var EVTXT = {
+    'open':function(e){ return e.data.back ? 'came back to the map' : 'opened the map'; },
+    'pin.save':function(e){ var s = STAT[e.data.status] || STAT.noans;
+      return 'marked ' + (e.data.addr || 'a house') + ' ' + s.label + (e.data.noLoc ? ' (no location)' : e.data.m != null ? ' · ' + (e.data.m < 1000 ? e.data.m + ' m' : (e.data.m / 1000).toFixed(1) + ' km') + ' from it' : ''); },
+    'pin.remove':function(e){ return 'removed ' + (e.data.addr || 'a house'); },
+    'pin.restore':function(e){ return 'put back ' + (e.data.addr || 'a house'); },
+    'follow.set':function(e){ return 'follow-up on ' + (e.data.addr || 'a house') + ': ' + (FOL[e.data.step] || FOL['']).label; },
+    'turf.create':function(e){ return 'drew turf ' + e.data.name; },
+    'turf.edit':function(e){ return 'changed turf ' + e.data.name + (e.data.who ? ' (' + e.data.who + ')' : ''); },
+    'turf.corners':function(e){ return 'moved the corners of ' + e.data.name; },
+    'turf.delete':function(e){ return 'deleted turf ' + e.data.name; },
+    'share':function(e){ return 'sent the ' + String(e.data.which || 'map').replace('leader:', 'leader link for ').replace('invite', 'team invite').replace('pastor', 'pastor') + ' link'; },
+    'search.houses':function(e){ return 'searched houses for “' + e.data.q + '”'; },
+    'search.place':function(e){ return 'looked up ' + (e.data.picked || e.data.q); },
+    'report.view':function(e){ return 'opened the report'; },
+    'activity.view':function(e){ return 'looked at the activity'; },
+    'team.add':function(e){ return 'added leader ' + e.data.name; },
+    'team.remove':function(e){ return 'removed leader ' + e.data.name; },
+    'campaign.set':function(e){ return 'started outreach “' + e.data.name + '”'; },
+    'campaign.end':function(e){ return 'ended outreach “' + e.data.name + '”'; },
+    'name.set':function(e){ return 'set their name to ' + e.data.to; }
+  };
+  var EVGROUP = { marks:['pin.save'], opens:['open'], changes:['pin.remove','pin.restore','follow.set','turf.create','turf.edit','turf.corners','turf.delete','team.add','team.remove','campaign.set','campaign.end','name.set','share'], searches:['search.houses','search.place','report.view','activity.view'] };
+  var actFilter = 'all';
+  function activitySheet(teamId){
+    var to = addDays(repWeek, 7), list = weekEvents(teamId, repWeek, to, function(){ if ($('actList')) activitySheet(teamId); });
+    var h = '<h3>Activity · ' + esc(teamId == null ? 'everyone' : teamName(teamId)) + '</h3><div class="sub">Who did what, and when.</div>' + weekNav();
+    h += '<div class="fchips">' + [['all','All'],['marks','Doors'],['opens','Map opens'],['changes','Changes'],['searches','Looking']].map(function(f){
+      return '<button data-af="' + f[0] + '" class="' + (actFilter === f[0] ? 'on' : '') + '">' + f[1] + '</button>'; }).join('') + '</div><div id="actList">';
+    if (!list) h += '<div class="empty">Loading…</div>';
+    else {
+      var shown = list.filter(function(e){ return actFilter === 'all' || (EVGROUP[actFilter] || []).indexOf(e.kind) >= 0; }).slice(0, 600), lastDay = '';
+      h += shown.length ? shown.map(function(e){
+        var day = new Date(e.at).toDateString(), head = '';
+        if (day !== lastDay) { lastDay = day; head = '<label>' + new Date(e.at).toLocaleDateString([], { weekday:'long', month:'short', day:'numeric' }) + '</label>'; }
+        var txt = (EVTXT[e.kind] || function(){ return e.kind; })(e);
+        var pin = e.data && e.data.id && items[e.data.id] && items[e.data.id].kind === 'pin' ? e.data.id : '';
+        return head + '<div class="rrow' + (pin ? ' tap" data-pin="' + pin : '') + '"><div class="n"><b>' + esc(e.who || 'Someone') + '</b> ' + esc(txt) +
+          '<span>' + new Date(e.at).toLocaleTimeString([], { hour:'numeric', minute:'2-digit' }) + (e.role && e.role !== 'worker' ? ' · ' + e.role : '') + '</span></div>' + (pin ? '<div class="c">›</div>' : '') + '</div>';
+      }).join('') : '<div class="empty">Nothing this week.</div>';
+    }
+    h += '</div><div class="acts"><button id="actBack">Back</button></div>';
+    openSheet(h);
+    wireWeekTo(function(){ activitySheet(teamId); });
+    $('actBack').addEventListener('click', function(){ report(); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-af]'), function(b){
+      b.addEventListener('click', function(){ actFilter = b.dataset.af; activitySheet(teamId); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#actList [data-pin]'), function(r){
+      r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
+    });
+  }
+  function wireWeekTo(fn){
+    $('wkPrev').addEventListener('click', function(){ repWeek = addDays(repWeek, -7); fn(); });
+    $('wkNext').addEventListener('click', function(){ if (addDays(repWeek, 7) <= Date.now()) { repWeek = addDays(repWeek, 7); fn(); } });
+  }
+
+  // the houses whose LAST visit by this team (null = anyone) left them in a state
+  function lastByTeam(p, teamId){
+    var es = (p.data.log || []).filter(function(l){ return teamId == null || (l.team || '') === teamId; });
+    return es.length ? es[es.length - 1] : null;
+  }
+  function comebacks(teamId){
+    var out = [];
+    live('pin').forEach(function(p){
+      var l = lastByTeam(p, teamId);
+      if (l && p.data.status === 'back' && l.status === 'back') out.push(p);
+    });
+    return out.sort(function(a, b){ return (a.data.backOn || '9999') < (b.data.backOn || '9999') ? -1 : 1; });
+  }
+  function interested(teamId){
+    return live('pin').filter(function(p){ var l = lastByTeam(p, teamId); return l && p.data.status === 'yes'; });
+  }
+  function pinRow(p, sub){
+    var s = STAT[p.data.status] || STAT.noans;
+    return '<div class="rrow tap" data-pin="' + p.id + '"><span class="dot" style="background:' + s.color + '"></span><div class="n">' + esc(p.data.addr || 'No address') +
+      '<span>' + sub + '</span></div><div class="c">›</div></div>';
+  }
+  // extra report sections shared by a team report and the pastor's
+  function extraSections(teamId, from, to){
+    var h = '', today = ymd(new Date());
+    var cb = comebacks(teamId);
+    h += '<label>Come-backs coming up (' + cb.length + ')</label>';
+    h += cb.length ? cb.slice(0, 60).map(function(p){
+      var c = p.data.contact || {}, d = p.data.backOn, late = d && d < today;
+      return pinRow(p, (d ? (late ? '<b style="color:#c2410c">was due ' + esc(dayName(d)) + '</b>' : esc(dayName(d))) : 'no day set') +
+        (c.name || c.phone ? ' · ' + esc([c.name, c.phone].filter(Boolean).join(', ')) : '') + (p.data.note ? '\n“' + esc(p.data.note) + '”' : ''));
+    }).join('') : '<div class="empty">None waiting.</div>';
+    var it = interested(teamId), by = {};
+    it.forEach(function(p){ var k = p.data.follow ? p.data.follow.step : ''; by[k] = (by[k] || 0) + 1; });
+    h += '<label>Interested, follow-up (' + it.length + ')</label>';
+    if (it.length) {
+      h += '<div class="counts" style="flex-wrap:wrap">' + FOLLOW.map(function(f){ return by[f.k] ? '<span class="chip">' + by[f.k] + ' ' + f.label + '</span>' : ''; }).join('') + '</div>';
+      var need = it.filter(function(p){ return !p.data.follow || !p.data.follow.step; });
+      h += need.length ? '<div class="empty" style="font-size:13px">Still need a follow-up:</div>' + need.slice(0, 60).map(function(p){
+        var c = p.data.contact || {};
+        return pinRow(p, 'Interested · ' + esc(p.data.who || '') + ' · ' + when(p.data.at) + (c.name || c.phone ? '\n' + esc([c.name, c.phone].filter(Boolean).join(', ')) : ''));
+      }).join('') : '<div class="empty">Every one has a follow-up.</div>';
+    } else h += '<div class="empty">Nobody marked Interested yet.</div>';
+    // removed this week, with a way back
+    var removed = [];
+    for (var id in items) {
+      var x = items[id];
+      if (x.kind === 'pin' && x.deleted && x.data.removedAt >= from && x.data.removedAt < to) {
+        var l = lastByTeam(x, teamId);
+        if (teamId == null || l) removed.push(x);
+      }
+    }
+    if (removed.length) h += '<label>Removed this week (' + removed.length + ')</label>' + removed.map(function(x){
+      return '<div class="rrow"><div class="n">' + esc(x.data.addr || 'No address') + '<span>Removed by ' + esc(x.data.removedBy || '?') + ' · ' + when(x.data.removedAt) + '</span></div>' +
+        '<button class="qd" data-restore="' + x.id + '">Put back</button></div>';
+    }).join('');
+    return h;
+  }
+  function wireExtras(){
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-restore]'), function(b){
+      b.addEventListener('click', function(){
+        var x = JSON.parse(JSON.stringify(items[b.dataset.restore]));
+        x.deleted = false; x.data.restoredBy = myName; x.data.restoredAt = Date.now();
+        save(x); track('pin.restore', { id:x.id, addr:x.data.addr });
+        report();
+      });
+    });
+  }
+  // per outreach, all time, from the name stamped on each visit
+  function campaignSection(){
+    var camps = {};
+    live('pin').forEach(function(p){
+      var seen = {};
+      (p.data.log || []).forEach(function(l){
+        if (!l.camp) return;
+        var c = camps[l.camp] = camps[l.camp] || { doors:0, yes:0, back:0, first:l.at, last:l.at, ppl:{} };
+        c.first = Math.min(c.first, l.at); c.last = Math.max(c.last, l.at); c.ppl[l.who] = 1;
+        seen[l.camp] = l;
+      });
+      Object.keys(seen).forEach(function(k){ var c = camps[k]; c.doors++; if (seen[k].status === 'yes') c.yes++; if (seen[k].status === 'back') c.back++; });
+    });
+    var names = Object.keys(camps).sort(function(a, b){ return camps[b].last - camps[a].last; });
+    var cur = currentCampaign();
+    var h = '<label>Outreaches</label>' + (cur ? '<div class="empty" style="font-size:13px">Now: ' + esc(cur) + '</div>' : '');
+    h += names.length ? names.map(function(n){ var c = camps[n];
+      return '<div class="rrow"><div class="n">' + esc(n) + '<span>' + dayLabel(c.first) + ' – ' + dayLabel(c.last) + ' · ' + peopleN(Object.keys(c.ppl).length) +
+        ' · ' + c.yes + ' interested · ' + c.back + ' come back</span></div><div class="c">' + doorsN(c.doors) + '</div></div>'; }).join('')
+      : '<div class="empty">No outreach named yet. Set one under Leaders.</div>';
+    return h;
+  }
+
   function report(){
     var to = addDays(repWeek, 7);
     if (!isPastor()) repTeam = myTeam;              // a leader only ever sees their own team
     if (repTeam == null) return reportAll(to);
     var w = teamWeek(repTeam, repWeek, to);
-    var h = '<h3>' + esc(teamName(repTeam)) + '</h3><div class="sub">Weekly report, Sunday to Saturday</div>' + weekNav();
+    var h = '<h3>' + esc(teamName(repTeam)) + '</h3><div class="sub">Weekly report, Sunday to Saturday' + (currentCampaign() ? ' · ' + esc(currentCampaign()) : '') + '</div>' + weekNav();
+    var evs = weekEvents(repTeam, repWeek, to, function(){ if (document.querySelector('#sheet .wk') && $('repClose')) report(); });
+    var active = {};   // name -> { days:{}, last }
+    (evs || []).forEach(function(e){ if (e.kind !== 'open' && e.kind !== 'pin.save') return;
+      var k = String(e.who || '').trim().toLowerCase(), a = active[k] = active[k] || { days:{}, last:0 };
+      a.days[new Date(e.at).toDateString()] = 1; a.last = Math.max(a.last, e.at); });
     h += '<div class="rrow tap" data-all="1"><div class="n">Doors knocked</div><div class="c">' + w.doors + ' ›</div></div>' + statChips(w.tot);
     // Team: everyone whose phone opened this team's link, plus anyone who marked
     // a door for it, with this week's doors beside each (0 shows who is idle).
@@ -1079,7 +1390,9 @@
     h += '<label>Team' + (roster.length ? ' (' + roster.length + ')' : '') + ' · doors this week</label>';
     h += roster.length ? roster.map(function(x, i){
       return '<div class="rrow tap" data-who="' + i + '"><div class="n">' + esc(x.name) + (x.lead ? ' <b style="font-size:11px; color:#1f4fd1">LEADER</b>' : '') +
-        (x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : '') + '</div><div class="c">' + x.doors + ' ›</div></div>';
+        (function(){ var a = active[String(x.name).trim().toLowerCase()];
+          if (a) { var n = Object.keys(a.days).length; return '<span>On the map ' + n + (n === 1 ? ' day' : ' days') + ' this week · last ' + when(a.last) + '</span>'; }
+          return x.seen ? '<span>Last opened the map ' + when(x.seen) + '</span>' : ''; })() + '</div><div class="c">' + x.doors + ' ›</div></div>';
     }).join('') : '';
     h += '<div class="empty" style="font-size:13px">' + (roster.length ? '' : 'Nobody yet. ') +
       'Anyone who opens this team\'s Invite team link shows up here.</div>';
@@ -1096,13 +1409,16 @@
         '<span>' + (progressText(x.hp) ? progressText(x.hp) + ' · ' : '') + x.wk + ' this week</span></div><div class="c">' +
         (x.hp.total ? (x.hp.total - x.hp.done) + ' left ›' : doorsN(x.all) + ' marked ›') + '</div></div>';
     }).join('') : '<div class="empty">No turf drawn for this team. Pick the team when you draw or edit one.</div>';
+    h += extraSections(repTeam, repWeek, to);
     if (!isPastor()) h += '<div class="empty" style="font-size:13px; margin-top:14px">Tip: in Safari tap Share, then Add to Home Screen. ' +
       'The icon always opens the map as you, the leader, on any day.</div>';
-    h += '<div class="acts">' + (isPastor() ? '<button id="repBack">All teams</button>' : '') + '<button id="repClose">Close</button></div>';
+    h += '<div class="acts">' + (isPastor() ? '<button id="repBack">All teams</button>' : '') + '<button id="repAct">Activity</button><button id="repClose">Close</button></div>';
     openSheet(h);
     wireWeek();
     $('repClose').addEventListener('click', closeSheet);
     if ($('repBack')) $('repBack').addEventListener('click', function(){ repTeam = null; report(); });
+    $('repAct').addEventListener('click', function(){ track('activity.view', { team:repTeam }); activitySheet(repTeam); });
+    wireExtras();
     Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pin]'), function(r){
       r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
     });
@@ -1118,7 +1434,7 @@
     var rows = liveTeams().map(function(t){ return [t.id, t.data.name]; });
     rows.push(['', 'No team']);
     var all = { doors:0, tot:{} };
-    var h = '<h3>All teams</h3><div class="sub">Weekly report, Sunday to Saturday. Tap a team for the detail.</div>' + weekNav();
+    var h = '<h3>All teams</h3><div class="sub">Weekly report, Sunday to Saturday. Tap a team for the detail.' + (currentCampaign() ? ' Now: ' + esc(currentCampaign()) + '.' : '') + '</div>' + weekNav();
     var body = rows.map(function(r){
       var w = teamWeek(r[0], repWeek, to);
       if (r[0] === '' && !w.doors) return '';
@@ -1130,11 +1446,17 @@
     }).join('');
     h += '<div class="rrow tap" data-all="1"><div class="n"><b>Everyone</b></div><div class="c">' + doorsN(all.doors) + ' ›</div></div>' + statChips(all.tot);
     h += '<label>Teams</label>' + (liveTeams().length ? body : '<div class="empty">No leaders set up yet. Tap Leaders to add them.</div>' + body);
-    h += '<div class="acts"><button id="repTeams">Leaders</button><button id="repClose">Close</button></div>';
+    h += extraSections(null, repWeek, to) + campaignSection();
+    h += '<div class="acts"><button id="repTeams">Leaders</button><button id="repAct">Activity</button><button id="repClose">Close</button></div>';
     openSheet(h);
     wireWeek();
     $('repClose').addEventListener('click', closeSheet);
     $('repTeams').addEventListener('click', teamsSetup);
+    $('repAct').addEventListener('click', function(){ track('activity.view', { team:'*' }); activitySheet(null); });
+    wireExtras();
+    Array.prototype.forEach.call(document.querySelectorAll('#sheet [data-pin]'), function(r){
+      r.addEventListener('click', function(){ var p = items[r.dataset.pin]; closeSheet(); map.setView([p.data.lat, p.data.lng], 19); openPin(p.id); });
+    });
     Array.prototype.forEach.call(document.querySelectorAll('[data-team]'), function(r){
       r.addEventListener('click', function(){ repTeam = r.dataset.team; report(); });
     });
@@ -1149,26 +1471,43 @@
       return '<div class="turf"><div class="t"><b>' + esc(t.data.name) + '</b></div>' +
         '<button data-lead="' + t.id + '">Leader link</button><button data-del="' + t.id + '">✕</button></div>';
     }).join('') : '<div class="empty">No leaders yet.</div>';
+    // the current outreach: every door marked while it is set carries its name
+    var cc = items.campaign && !items.campaign.deleted ? items.campaign.data : {};
+    h += '<label>Current outreach</label>' + (cc.name ? '<div class="empty" style="font-size:13.5px">Since ' + when(cc.since) + ', set by ' + esc(cc.by || '') + '</div>' : '') +
+      '<div style="display:flex; gap:8px"><input type="text" id="campName" placeholder="e.g. Fall revival" value="' + esc(cc.name || '') + '" style="flex:1">' +
+      '<button id="campSave" class="qd">Set</button>' + (cc.name ? '<button id="campEnd" class="qd">End</button>' : '') + '</div>';
     h += '<label>Add a leader</label><input type="text" id="newLead" placeholder="e.g. Bro Paul">';
     h += '<div class="acts"><button id="tsBack">Back</button><button class="save" id="tsAdd">Add</button></div>';
     h += '<label>Your pastor link</label><div class="empty">Only for you and the pastor. It sees every team.</div>' +
          '<div class="acts" style="margin-top:6px"><button id="tsPastor">Send pastor link</button></div>';
     openSheet(h);
     $('tsBack').addEventListener('click', function(){ repTeam = null; report(); });
+    function setCampaign(name){
+      var cur = items.campaign && !items.campaign.deleted ? items.campaign.data : {}, now = Date.now();
+      var past = (cur.past || []).slice();
+      if (cur.name) past.push({ name:cur.name, from:cur.since, to:now, by:cur.by });
+      save({ id:'campaign', kind:'meta', data:{ name:name, since:now, by:myName, past:past.slice(-50) } });
+      track(name ? 'campaign.set' : 'campaign.end', { name:name || cur.name || '' });
+      teamsSetup();
+    }
+    $('campSave').addEventListener('click', function(){ var n = $('campName').value.trim(); if (n) setCampaign(n); });
+    if ($('campEnd')) $('campEnd').addEventListener('click', function(){ if (confirm('End the current outreach?')) setCampaign(''); });
     $('tsAdd').addEventListener('click', function(){
       var n = $('newLead').value.trim(); if (!n) return $('newLead').focus();
-      save({ id:'tm' + rid(10), kind:'team', data:{ name:n, leaderKey:rid(12) } });
+      save({ id:'tm' + rid(10), kind:'team', data:{ name:n, leaderKey:rid(12), addedBy:myName, addedAt:Date.now() } });
+      track('team.add', { name:n });
       teamsSetup();
     });
-    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.'); });
+    $('tsPastor').addEventListener('click', function(){ shareUrl(BASE + '&p=' + myPastor, 'Door knocking, pastor link', 'Pastor link copied.', 'pastor'); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-lead]'), function(b){
       b.addEventListener('click', function(){ var t = items[b.dataset.lead];
-        shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.'); });
+        shareUrl(leaderLink(t), 'Door knocking, ' + t.data.name, 'Leader link for ' + t.data.name + ' copied. Send it to them only.', 'leader:' + t.data.name); });
     });
     Array.prototype.forEach.call(document.querySelectorAll('[data-del]'), function(b){
       b.addEventListener('click', function(){ var t = JSON.parse(JSON.stringify(items[b.dataset.del]));
         if (!confirm('Remove ' + t.data.name + ' as a leader? Doors their team marked stay on the map.')) return;
-        t.deleted = true; save(t); teamsSetup(); });
+        t.data.removedBy = myName; t.data.removedAt = Date.now();
+        t.deleted = true; save(t); track('team.remove', { name:t.data.name }); teamsSetup(); });
     });
   }
   // ---- search (leaders and the pastor) ---------------------------------------------
@@ -1178,8 +1517,8 @@
   var mapFilter = null;                                   // pin id -> 1 while results are shown on the map
   var sq = { q:'', st:{}, week:false, team:false };       // kept so reopening search restores it
   function hay(p){
-    var d = p.data, parts = [d.addr, d.note, d.who];
-    (d.log || []).forEach(function(l){ parts.push(l.note, l.addr, l.who, l.team ? teamName(l.team) : ''); });
+    var d = p.data, parts = [d.addr, d.note, d.who, d.contact && d.contact.name, d.contact && d.contact.phone, d.contact && String(d.contact.phone || '').replace(/[^0-9]/g, '')];
+    (d.log || []).forEach(function(l){ parts.push(l.note, l.addr, l.who, l.team ? teamName(l.team) : '', l.camp, l.contact && l.contact.name, l.contact && l.contact.phone); });
     return parts.filter(Boolean).join(' \n ').toLowerCase();
   }
   function searchPins(){
@@ -1241,7 +1580,9 @@
       return list;
     }
     run();
-    $('sq').addEventListener('input', function(){ sq.q = this.value; run(); });
+    var sqT = null;
+    $('sq').addEventListener('input', function(){ sq.q = this.value; run();
+      clearTimeout(sqT); sqT = setTimeout(function(){ if (sq.q.trim().length >= 2) track('search.houses', { q:sq.q.trim(), found:searchPins().length }); }, 1500); });
     Array.prototype.forEach.call(document.querySelectorAll('.fchips button'), function(b){
       b.addEventListener('click', function(){
         if (b.dataset.st) sq.st[b.dataset.st] = !sq.st[b.dataset.st];
@@ -1326,7 +1667,7 @@
           (x.l2 ? '<span>' + esc(x.l2) + '</span>' : '') + '</div><div class="c">›</div></div>';
       }).join('') : '<div class="empty">Nothing found. Try the street address.</div>';
       Array.prototype.forEach.call(document.querySelectorAll('#gRes [data-g]'), function(r){
-        r.addEventListener('click', function(){ list[+r.dataset.g].go(); });
+        r.addEventListener('click', function(){ var x = list[+r.dataset.g]; track('search.place', { q:el.value.trim(), picked:x.l1 + (x.l2 ? ', ' + x.l2 : '') }); x.go(); });
       });
     }
     function run(){
@@ -1345,6 +1686,7 @@
 
   $('reportBtn').addEventListener('click', function(){
     repTeam = isPastor() ? null : myTeam; report();
+    track('report.view', { team:repTeam == null ? '*' : repTeam });
     loadTurfs().then(function(added){ if (added && sheetOpen && document.querySelector('#sheet .wk')) report(); });
   });
 
@@ -1353,8 +1695,10 @@
   // walk. Only if the phone will not say where you are does it open on the
   // houses already marked instead.
   var meDot = null, myLL = null, located = false, locFailed = false, fitted = false;
+  var myPos = null;   // the last fix: where the phone is, how sure, when
   function showMe(pos){
     myLL = [pos.coords.latitude, pos.coords.longitude];
+    myPos = { lat:myLL[0], lng:myLL[1], acc:Math.round(pos.coords.accuracy || 0), t:Date.now() };
     if (meDot) meDot.setLatLng(myLL);
     else meDot = L.circleMarker(myLL, { radius:7, color:'#fff', weight:3, fillColor:'#1a73e8', fillOpacity:1, interactive:false }).addTo(map);
     if (!located && !fitted) map.setView(myLL, 18);
@@ -1416,8 +1760,13 @@
   checkVersion();
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) checkVersion(); });
   pull(); flush();
-  setInterval(function(){ if (!document.hidden) { pull(); flush(); } }, 8000);
-  document.addEventListener('visibilitychange', function(){ if (!document.hidden) { pull(); flush(); } });
+  setInterval(function(){ if (!document.hidden) { pull(); flush(); flushEvents(); } }, 8000);
+  var hiddenAt = 0;
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    pull(); flush(); flushEvents();
+    if (hiddenAt && Date.now() - hiddenAt > 10 * 60e3) track('open', { v:MY_VER, back:true, away:Math.round((Date.now() - hiddenAt) / 60e3) });
+  });
   window.addEventListener('online', flush);
   if (!myName) askName();
 })();
